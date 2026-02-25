@@ -864,22 +864,8 @@ window.addEventListener('offline', function(){updateSyncStatus(false)});
 
 // Seed default data to Firestore (first time only)
 function fbSeedDefaults() {
-  if(!_firebaseAvailable || !db) return Promise.resolve();
-  return db.collection('members').get().then(function(snap){
-    if(snap.size > 0) return; // Already has data
-    console.log('🔥 Seeding default data...');
-    _suppressSync = true;
-    return Promise.all([
-      fbSaveCollection('members', members),
-      fbSaveCollection('tasks', tasks),
-      fbSaveCollection('reports', reports),
-      fbSaveCollection('approvals', approvals),
-      fbSaveCollection('announcements', announcements)
-    ]).then(function(){
-      _suppressSync = false;
-      console.log('🔥 Default data seeded');
-    });
-  });
+  // No default data to seed — users register themselves
+  return Promise.resolve();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -987,59 +973,19 @@ const DEPARTMENTS = [
 ];
 
 let members = [
-  {id:1,name:"جود الطريسي",role:"admin",email:"joud@fintech.sa",teamId:null,dept:null,title:"مؤسسة الفكرة - رئيسة"},
-  {id:2,name:"العنود القحطاني",role:"admin",email:"anoud@fintech.sa",teamId:null,dept:null,title:"مؤسسة الفكرة - رئيسة"},
-  {id:3,name:"د. أحمد المنصور",role:"supervisor",email:"ahmed@imamu.edu.sa",teamId:null,dept:null,title:"مشرف الفعالية"},
-  {id:4,name:"سارة العمري",role:"member",email:"sara@fintech.sa",teamId:101,dept:1,title:"عضو"},
-  {id:5,name:"محمد الدوسري",role:"member",email:"moh@fintech.sa",teamId:201,dept:2,title:"عضو"},
-  {id:6,name:"نورة الشهري",role:"member",email:"noura@fintech.sa",teamId:301,dept:3,title:"عضو"},
-  {id:7,name:"خالد الغامدي",role:"member",email:"khalid@fintech.sa",teamId:401,dept:4,title:"عضو"},
-  {id:8,name:"ريم الحربي",role:"member",email:"reem@fintech.sa",teamId:null,dept:5,title:"عضو"},
-  {id:9,name:"فهد السبيعي",role:"member",email:"fahad@fintech.sa",teamId:null,dept:4,title:"عضو"},
-  {id:10,name:"لمى الزهراني",role:"member",email:"lama@fintech.sa",teamId:102,dept:1,title:"عضو"},
-  {id:11,name:"عبدالرحمن القرني",role:"member",email:"abdulrahman@fintech.sa",teamId:202,dept:2,title:"عضو"},
-  {id:12,name:"هيفاء المطيري",role:"member",email:"haifa@fintech.sa",teamId:302,dept:3,title:"عضو"},
 ];
 
-let tasks = [
-  {id:1,title:"إعداد الخطة التشغيلية الشاملة",desc:"تجهيز الخطة التشغيلية للفعالية من البداية للنهاية",assignedTo:10,teamId:102,dept:1,status:"completed",priority:"high",deadline:"2026-02-25",createdAt:"2026-02-01",progress:100},
-  {id:2,title:"تصميم الهوية البصرية",desc:"تصميم الشعار والألوان والخطوط المعتمدة",assignedTo:5,teamId:201,dept:2,status:"in_progress",priority:"high",deadline:"2026-02-28",createdAt:"2026-02-05",progress:75},
-  {id:3,title:"التواصل مع الشركات المستهدفة",desc:"إرسال دعوات للشركات المحتملة للمشاركة",assignedTo:6,teamId:301,dept:3,status:"in_progress",priority:"medium",deadline:"2026-03-01",createdAt:"2026-02-10",progress:40},
-  {id:4,title:"إعداد الميزانية التقديرية",desc:"تقدير التكاليف والميزانية المطلوبة للفعالية",assignedTo:7,teamId:402,dept:4,status:"completed",priority:"high",deadline:"2026-02-20",createdAt:"2026-02-01",progress:100},
-  {id:5,title:"نشر إعلانات التطوع",desc:"تجهيز ونشر إعلانات التطوع في الجامعة",assignedTo:8,teamId:null,dept:5,status:"completed",priority:"medium",deadline:"2026-02-22",createdAt:"2026-02-05",progress:100},
-  {id:6,title:"إعداد خطة الطوارئ",desc:"تجهيز سيناريوهات بديلة وخطط طوارئ",assignedTo:9,teamId:null,dept:4,status:"not_started",priority:"medium",deadline:"2026-03-10",createdAt:"2026-02-15",progress:0},
-  {id:7,title:"إعداد الخطة التسويقية",desc:"وضع استراتيجية التسويق عبر القنوات المختلفة",assignedTo:11,teamId:202,dept:2,status:"in_progress",priority:"high",deadline:"2026-03-01",createdAt:"2026-02-08",progress:60},
-  {id:8,title:"إعداد حزم الرعاية",desc:"تجهيز عروض الرعاية بمستوياتها المختلفة",assignedTo:12,teamId:302,dept:3,status:"delayed",priority:"high",deadline:"2026-02-18",createdAt:"2026-02-01",progress:30},
-  {id:9,title:"تصميم رحلة الزائر",desc:"تخطيط مسار الزائر من الدخول للخروج",assignedTo:4,teamId:104,dept:1,status:"not_started",priority:"low",deadline:"2026-03-15",createdAt:"2026-02-18",progress:0},
-  {id:10,title:"إنشاء لوحات المتابعة",desc:"تجهيز Dashboards للإدارات",assignedTo:7,teamId:403,dept:4,status:"in_progress",priority:"medium",deadline:"2026-03-05",createdAt:"2026-02-10",progress:50},
-];
+let tasks = [];
 
-let reports = [
-  {id:1,title:"تقرير تقدم الأسبوع الأول",author:1,date:"2026-02-07",dept:null,content:"تم الانتهاء من تشكيل الفرق وتوزيع المهام الأولية على جميع الإدارات. تم عقد الاجتماع التأسيسي مع جميع رؤساء الفرق.",status:"published",type:"progress"},
-  {id:2,title:"تقرير الميزانية التقديرية",author:7,date:"2026-02-18",dept:4,content:"تم إعداد الميزانية التقديرية بإجمالي 45,000 ريال. تشمل: تجهيزات الموقع 15,000، الطباعة والمواد 8,000، الضيافة 7,000، التسويق 10,000، متنوعة 5,000.",status:"published",type:"financial"},
-  {id:3,title:"تقرير تقدم التصميم",author:5,date:"2026-02-19",dept:2,content:"تم الانتهاء من 75% من الهوية البصرية. الشعار النهائي جاهز، جاري العمل على قوالب السوشال ميديا والبنرات.",status:"draft",type:"progress"},
-];
+let reports = [];
 
-let approvals = [
-  {id:1,title:"طلب موافقة على حجز القاعة الرئيسية",requester:1,date:"2026-02-15",status:"approved",approvedBy:3,approvedAt:"2026-02-16",notes:"تم الموافقة على حجز القاعة الرئيسية يوم الفعالية",type:"venue"},
-  {id:2,title:"طلب موافقة على الميزانية التقديرية",requester:7,date:"2026-02-18",status:"pending",approvedBy:null,approvedAt:null,notes:"بانتظار موافقة المشرف على الميزانية المقترحة 45,000 ريال",type:"budget"},
-  {id:3,title:"طلب استخدام شاشات الجامعة للإعلان",requester:11,date:"2026-02-19",status:"pending",approvedBy:null,approvedAt:null,notes:"نحتاج موافقة على عرض إعلانات الفعالية على شاشات الجامعة",type:"marketing"},
-  {id:4,title:"طلب موافقة على قائمة المتحدثين",requester:2,date:"2026-02-20",status:"pending",approvedBy:null,approvedAt:null,notes:"قائمة المتحدثين المقترحين للجلسات الحوارية",type:"speakers"},
-];
+let approvals = [];
 
-let announcements = [
-  {id:1,author:1,date:"2026-02-01",content:"الزملاء الأفاضل، السلام عليكم. آمل التقيد بالتسجيل اليومي، وكذلك الانتباه بأن يكون المعتمد هو الهجري لمتابعة المواسم. شاكرين ومقدرين تعاونكم."},
-  {id:2,author:2,date:"2026-02-10",content:"تذكير: اجتماع عام لجميع الفرق يوم الأحد القادم الساعة 4 عصراً في القاعة 203."},
-  {id:3,author:1,date:"2026-02-15",content:"تم الانتهاء من تشكيل جميع الفرق. نشكر الجميع على التعاون والحماس!"},
-];
+let announcements = [];
 
-let bugReports = [
-  {id:1,title:"مشكلة في تحميل الملفات على الجوال",reporter:4,reporterName:"سارة العمري",date:"2026-02-19",desc:"ما أقدر أحمل الملفات المرفقة من الجوال — يطلع لي خطأ",status:"open",replies:[]},
-];
+let bugReports = [];
 
-let warnings = [
-  {id:1,title:"تنبيه تأخر في تسليم حزم الرعاية",targetId:12,targetName:"هيفاء المطيري",issuedBy:1,issuedByName:"جود الطريسي",date:"2026-02-19",severity:"warning",reason:"تأخر في تسليم حزم الرعاية عن الموعد المحدد",status:"active"},
-];
+let warnings = [];
 
 const STATUS = {
   not_started:{label:"لم يبدأ",color:"#94A3B8",bg:"#F1F5F9"},
@@ -1166,11 +1112,13 @@ function handleLogin() {
     errEl.style.color='#DC2626';
     errEl.style.display='block';
     var msg = 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+    console.error('Login error:', err.code, err.message);
     if(err.code==='auth/user-not-found') msg='هذا البريد غير مسجل — سجّل حساب جديد';
     if(err.code==='auth/wrong-password'||err.code==='auth/invalid-credential') msg='كلمة المرور غير صحيحة';
     if(err.code==='auth/too-many-requests') msg='محاولات كثيرة — حاول بعد دقائق';
     if(err.code==='auth/network-request-failed') msg='لا يوجد اتصال بالإنترنت';
-    errEl.textContent = msg;
+    if(err.code==='auth/operation-not-allowed') msg='تسجيل الإيميل غير مفعّل — فعّله من Firebase Console';
+    errEl.textContent = msg + ' [' + (err.code||'') + ']';
   });
 }
 
@@ -1240,10 +1188,14 @@ function handleRegister() {
     sucEl.style.display='none';
     errEl.style.display='block';
     var msg = 'حدث خطأ أثناء التسجيل';
+    console.error('Register error:', err.code, err.message);
     if(err.code==='auth/email-already-in-use') msg='البريد الإلكتروني مسجل مسبقاً — سجّل دخول بدلاً من ذلك';
     if(err.code==='auth/weak-password') msg='كلمة المرور ضعيفة — استخدم 6 أحرف على الأقل';
     if(err.code==='auth/network-request-failed') msg='لا يوجد اتصال بالإنترنت';
-    errEl.textContent = msg;
+    if(err.code==='auth/invalid-api-key') msg='مفتاح API غير صحيح';
+    if(err.code==='auth/operation-not-allowed') msg='تسجيل الإيميل غير مفعّل — فعّله من Firebase Console';
+    if(err.code==='auth/admin-restricted-operation') msg='التسجيل محظور — فعّل Email/Password من Authentication → Sign-in method';
+    errEl.textContent = msg + ' [' + (err.code||'unknown') + ']';
   });
 }
 
