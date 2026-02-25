@@ -1106,7 +1106,7 @@ function switchLoginTab(tab) {
 function toggleRegDeptTeam() {
   var role = $('regRole').value;
   var wrap = document.getElementById('regDeptTeamWrap');
-  if(wrap) wrap.style.display = (role === 'supervisor') ? 'none' : '';
+  if(wrap) wrap.style.display = (role === 'member') ? '' : 'none';
 }
 
 function filterRegTeams() {
@@ -1197,8 +1197,8 @@ function handleRegister() {
     if(members.find(function(m){return m.email===email})) { errEl.style.display='block'; errEl.textContent='البريد الإلكتروني مسجل مسبقاً'; return; }
     var newMember = {
       id: Date.now(), name:name, email:email, role:role,
-      teamId: role==='supervisor' ? null : teamId,
-      dept: role==='supervisor' ? null : deptId,
+      teamId: (role==='supervisor'||role==='admin') ? null : teamId,
+      dept: (role==='supervisor'||role==='admin') ? null : deptId,
       title: role==='admin' ? 'مدير' : role==='supervisor' ? 'مشرف الفعالية' : 'عضو'
     };
     members.push(newMember);
@@ -1226,8 +1226,8 @@ function handleRegister() {
       // Create new member
       newMember = {
         id: Date.now(), name:name, email:email, role:role, uid:cred.user.uid,
-        teamId: role==='supervisor' ? null : teamId,
-        dept: role==='supervisor' ? null : deptId,
+        teamId: (role==='supervisor'||role==='admin') ? null : teamId,
+        dept: (role==='supervisor'||role==='admin') ? null : deptId,
         title: role==='admin' ? 'مدير' : role==='supervisor' ? 'مشرف الفعالية' : 'عضو'
       };
       members.push(newMember);
