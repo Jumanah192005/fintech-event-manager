@@ -825,24 +825,26 @@ function fbListen() {
   ];
   cols.forEach(function(col) {
     db.collection(col.name).onSnapshot(function(snap) {
-      if(_suppressSync || snap.metadata.hasPendingWrites) return;
-      col.target(snap.docs.map(function(d){return d.data()}));
+      if(_suppressSync) return;
+      var newData = snap.docs.map(function(d){return d.data()});
+      col.target(newData);
+      console.log('🔄 Synced '+col.name+': '+newData.length+' docs');
       if(currentUser && _fbReady) {
         try { renderCurrentPage(); updatePendingBadge(); } catch(e){}
       }
-    });
+    }, function(err){ console.error('Listener error '+col.name+':', err); });
   });
   // Settings listeners
   ['wbsPhases','timelinePhases','orgReport'].forEach(function(key){
     db.collection('settings').doc(key).onSnapshot(function(snap){
-      if(_suppressSync || !snap.exists || snap.metadata.hasPendingWrites) return;
+      if(_suppressSync || !snap.exists) return;
       try {
         var d = JSON.parse(snap.data().data);
         if(key==='wbsPhases') wbsPhases=d;
         if(key==='timelinePhases') timelinePhases=d;
         if(key==='orgReport') orgReportSections=d;
       } catch(e){}
-    });
+    }, function(err){ console.error('Settings listener error:', err); });
   });
 }
 
@@ -931,6 +933,8 @@ function sendEmailNotification(toEmail, subject, bodyHtml, callback) {
 // Notify specific role members
 function notifyRole(role, subject, bodyHtml) {
   var targets = members.filter(function(m){return m.role===role && m.email});
+  console.log('📧 Notifying '+role+'s: found '+targets.length+' targets', targets.map(function(m){return m.name+' ('+m.email+')'}));
+  if(targets.length===0) { console.warn('📧 No '+role+'s found — email not sent!'); showToast('⚠️ لا يوجد '+({supervisor:'مشرف',admin:'مدير'}[role]||role)+' مسجل لاستلام الإشعار','#D97706'); }
   targets.forEach(function(m){
     sendEmailNotification(m.email, subject, bodyHtml);
   });
@@ -1097,23 +1101,26 @@ function handleLogin() {
   _authActionInProgress = true;
 
   auth.signInWithEmailAndPassword(email, pass).then(function(cred) {
-    // Auth success - find member profile
+    // Auth success - load all data from Firestore first
     return fbLoadAll().then(function(){
       var found = members.find(function(m){return m.email===email || m.uid===cred.user.uid});
       if(found) {
         found.uid = cred.user.uid;
-        db.collection('members').doc(String(found.id)).set(found);
+        db.collection('members').doc(String(found.id)).set(found).catch(function(e){});
         login(found);
       } else {
-        // User in Auth but not in members — auto-create
+        // User in Auth but not in Firestore — auto-create
+        var isFirst = members.length === 0;
         var autoMember = {
           id: Date.now(), name: cred.user.displayName || email.split('@')[0],
-          email: email, role: 'member', uid: cred.user.uid,
-          teamId: null, dept: null, title: 'عضو'
+          email: email, role: isFirst ? 'admin' : 'member', uid: cred.user.uid,
+          teamId: null, dept: null, title: isFirst ? 'مدير' : 'عضو'
         };
         members.push(autoMember);
-        db.collection('members').doc(String(autoMember.id)).set(autoMember);
-        login(autoMember);
+        return db.collection('members').doc(String(autoMember.id)).set(autoMember).then(function(){
+          console.log('🔥 Auto-created member:', autoMember.name, autoMember.role);
+          login(autoMember);
+        });
       }
     });
   }).catch(function(err) {
@@ -1174,26 +1181,36 @@ function handleRegister() {
   auth.createUserWithEmailAndPassword(email, pass).then(function(cred) {
     var newMember;
     if(existing) {
-      // Update existing member with uid
       existing.uid = cred.user.uid;
       if(name) existing.name = name;
       newMember = existing;
-      // Update in Firestore
-      db.collection('members').doc(String(existing.id)).set(existing);
     } else {
-      // Create new member
+      // First user ever? Make them admin automatically
+      var actualRole = role;
+      if(members.length === 0) {
+        actualRole = 'admin';
+        console.log('🔥 First user — auto-assigned as admin');
+      }
       newMember = {
-        id: Date.now(), name:name, email:email, role:role, uid:cred.user.uid,
-        teamId: (role==='supervisor'||role==='admin') ? null : teamId,
-        dept: (role==='supervisor'||role==='admin') ? null : deptId,
-        title: role==='admin' ? 'مدير' : role==='supervisor' ? 'مشرف الفعالية' : 'عضو'
+        id: Date.now(), name:name, email:email, role:actualRole, uid:cred.user.uid,
+        teamId: (actualRole==='supervisor'||actualRole==='admin') ? null : teamId,
+        dept: (actualRole==='supervisor'||actualRole==='admin') ? null : deptId,
+        title: actualRole==='admin' ? 'مدير' : actualRole==='supervisor' ? 'مشرف الفعالية' : 'عضو'
       };
       members.push(newMember);
-      db.collection('members').doc(String(newMember.id)).set(newMember);
     }
 
-    sucEl.textContent = '✅ تم إنشاء حسابك بنجاح! جاري تسجيل الدخول...';
-    setTimeout(function(){ login(newMember); }, 1000);
+    // WAIT for Firestore write to complete, then login
+    db.collection('members').doc(String(newMember.id)).set(newMember).then(function(){
+      console.log('🔥 Member saved to Firestore:', newMember.name, newMember.role);
+      sucEl.textContent = '✅ تم إنشاء حسابك بنجاح! جاري تسجيل الدخول...';
+      setTimeout(function(){ login(newMember); }, 800);
+    }).catch(function(e){
+      console.error('🔥 Firestore write FAILED:', e);
+      sucEl.textContent = '✅ تم إنشاء الحساب (حفظ محلي)';
+      // Still login even if Firestore fails
+      setTimeout(function(){ login(newMember); }, 800);
+    });
   }).catch(function(err) {
     _authActionInProgress = false;
     sucEl.style.display='none';
@@ -1203,16 +1220,28 @@ function handleRegister() {
     if(err.code==='auth/email-already-in-use') {
       // Email exists in Auth — try signing in and create/update member
       auth.signInWithEmailAndPassword(email, pass).then(function(cred){
-        var newMember = {
-          id: Date.now(), name:name, email:email, role:role, uid:cred.user.uid,
-          teamId: (role==='supervisor'||role==='admin') ? null : teamId,
-          dept: (role==='supervisor'||role==='admin') ? null : deptId,
-          title: role==='admin' ? 'مدير' : role==='supervisor' ? 'مشرف الفعالية' : 'عضو'
-        };
-        members.push(newMember);
-        db.collection('members').doc(String(newMember.id)).set(newMember);
-        sucEl.style.display='block'; sucEl.textContent='✅ تم ربط حسابك! جاري الدخول...';
-        setTimeout(function(){ login(newMember); }, 1000);
+        return fbLoadAll().then(function(){
+          var found = members.find(function(m){return m.email===email || m.uid===cred.user.uid});
+          if(found) {
+            found.uid = cred.user.uid;
+            if(name) found.name = name;
+            db.collection('members').doc(String(found.id)).set(found).then(function(){
+              login(found);
+            });
+          } else {
+            var newMember = {
+              id: Date.now(), name:name, email:email, role:role, uid:cred.user.uid,
+              teamId: (role==='supervisor'||role==='admin') ? null : teamId,
+              dept: (role==='supervisor'||role==='admin') ? null : deptId,
+              title: role==='admin' ? 'مدير' : role==='supervisor' ? 'مشرف الفعالية' : 'عضو'
+            };
+            members.push(newMember);
+            db.collection('members').doc(String(newMember.id)).set(newMember).then(function(){
+              sucEl.style.display='block'; sucEl.textContent='✅ تم ربط حسابك! جاري الدخول...';
+              setTimeout(function(){ login(newMember); }, 800);
+            });
+          }
+        });
       }).catch(function(e2){
         _authActionInProgress = false;
         errEl.style.display='block'; errEl.textContent='البريد مسجل بكلمة مرور مختلفة — سجّل دخول من تاب تسجيل الدخول';
@@ -3917,6 +3946,12 @@ addMember = function() { _origAddMember(); saveSession(); };
 // ═══════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', function() {
   initStars();
+  // Clear stale localStorage cache to ensure fresh Firestore data
+  ['fintech_tasks','fintech_reports','fintech_approvals','fintech_announcements',
+   'fintech_members','fintech_warnings','fintech_bugs','fintech_companies',
+   'fintech_wbs_phases','fintech_phases','fintech_org_report'].forEach(function(k){
+    localStorage.removeItem(k);
+  });
   loadData(); // Load cached data from localStorage first (fast)
   loadFirebaseScripts(); // Try to load Firebase (async)
 });
