@@ -718,13 +718,6 @@ function initFirebase() {
     auth = firebase.auth();
     db = firebase.firestore();
     storage = firebase.storage();
-    // Verify Storage connection
-    try {
-      storage.ref('test').getDownloadURL().catch(function(){});
-      console.log('📁 Storage initialized');
-    } catch(e) {
-      console.warn('📁 Storage init warning:', e);
-    }
     db.enablePersistence({synchronizeTabs:true}).catch(function(err){console.log('Persistence:',err.code)});
     _firebaseAvailable = true;
     console.log('🔥 Firebase initialized');
@@ -772,27 +765,17 @@ function startOfflineMode() {
 function cleanForDb(obj) {
   if(!obj) return obj;
   var c = Object.assign({}, obj);
-  // Keep URLs, and keep base64 for small files (< 900KB) as fallback
+  // Keep URLs, only strip base64 data
   if(c.file) {
-    if(c.file.url) {
-      c.file = {name:c.file.name,size:c.file.size,type:c.file.type,url:c.file.url};
-    } else if(c.file.data) {
-      // Keep base64 if small enough for Firestore (< 900KB)
-      if(c.file.data.length < 900000) {
-        // Keep data for Firestore
-      } else {
-        c.file = {name:c.file.name,size:c.file.size,type:c.file.type};
-      }
-    }
+    if(c.file.url) c.file = {name:c.file.name,size:c.file.size,type:c.file.type,url:c.file.url};
+    else if(c.file.data) c.file = {name:c.file.name,size:c.file.size,type:c.file.type};
   }
   if(c.responseFile) {
     if(c.responseFile.url) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type,url:c.responseFile.url};
-    else if(c.responseFile.data && c.responseFile.data.length < 900000) { /* keep */ }
     else if(c.responseFile.data) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type};
   }
   if(c.images && c.images.length) c.images = c.images.map(function(img){
     if(img.url) return {name:img.name,size:img.size,url:img.url};
-    if(img.data && img.data.length < 900000) return img; // Keep small images
     return {name:img.name,size:img.size};
   });
   return c;
@@ -802,14 +785,7 @@ function cleanForDb(obj) {
 // FIREBASE STORAGE — Cloud File Storage
 // ═══════════════════════════════════════
 function uploadToStorage(fileObj, folder) {
-  if(!fileObj || !fileObj.data) return Promise.resolve(fileObj);
-  
-  // If Storage not available, store base64 directly in Firestore (for small files < 800KB)
-  if(!storage || !_firebaseAvailable) {
-    console.warn('📁 Storage not available, keeping base64');
-    return Promise.resolve(fileObj);
-  }
-
+  if(!storage || !_firebaseAvailable || !fileObj || !fileObj.data) return Promise.resolve(fileObj);
   try {
     var parts = fileObj.data.split(',');
     var mime = parts[0].match(/:(.*?);/)[1];
@@ -817,22 +793,19 @@ function uploadToStorage(fileObj, folder) {
     var arr = new Uint8Array(bstr.length);
     for(var i=0;i<bstr.length;i++) arr[i]=bstr.charCodeAt(i);
     var blob = new Blob([arr], {type: mime});
-    console.log('📁 Uploading:', fileObj.name, '('+Math.round(blob.size/1024)+'KB)');
   } catch(e) {
     console.error('📁 File conversion error:', e);
     return Promise.resolve(fileObj);
   }
   var path = 'files/' + folder + '/' + Date.now() + '_' + (fileObj.name||'file');
-  return storage.ref(path).put(blob, {contentType: mime}).then(function(snap) {
+  return storage.ref(path).put(blob).then(function(snap) {
     return snap.ref.getDownloadURL();
   }).then(function(url) {
-    console.log('📁 ✅ Uploaded:', fileObj.name, '→', url);
-    showToast('✅ تم رفع الملف بنجاح','#059669');
+    console.log('📁 Uploaded:', fileObj.name, '→', url);
     return {name: fileObj.name, size: fileObj.size, type: fileObj.type, url: url};
   }).catch(function(err) {
-    console.error('📁 ❌ Upload failed:', err.code, err.message, err);
-    showToast('⚠️ فشل رفع الملف: ' + (err.code||err.message||'خطأ غير معروف'),'#DC2626');
-    // Fallback: keep base64 data so at least it works on this device
+    console.error('📁 Upload failed:', err.code, err.message);
+    showToast('⚠️ فشل رفع الملف — سيُحفظ محلياً فقط','#D97706');
     return fileObj;
   });
 }
@@ -848,23 +821,11 @@ function uploadImagesToStorage(images) {
 // Save a collection to Firestore
 function fbSaveCollection(colName, items) {
   if(!_fbReady || !_firebaseAvailable || !db) return Promise.resolve();
-  // Save each document individually to handle size limits
-  var promises = items.map(function(item) {
-    var cleaned = cleanForDb(item);
-    return db.collection(colName).doc(String(item.id)).set(cleaned).catch(function(e) {
-      if(e.message && e.message.indexOf('exceeds the maximum') > -1) {
-        // Document too large — strip file data and retry
-        console.warn('📁 Doc too large, stripping file data:', item.id);
-        if(cleaned.file && cleaned.file.data) cleaned.file = {name:cleaned.file.name,size:cleaned.file.size,type:cleaned.file.type};
-        if(cleaned.images) cleaned.images = cleaned.images.map(function(img){return {name:img.name,size:img.size,url:img.url||null}});
-        return db.collection(colName).doc(String(item.id)).set(cleaned).catch(function(e2){
-          console.warn('FB save '+colName+' item '+item.id+':', e2);
-        });
-      }
-      console.warn('FB save '+colName+' item '+item.id+':', e);
-    });
+  var batch = db.batch();
+  items.forEach(function(item) {
+    batch.set(db.collection(colName).doc(String(item.id)), cleanForDb(item));
   });
-  return Promise.all(promises);
+  return batch.commit().catch(function(e){console.warn('FB save '+colName+':', e)});
 }
 
 function fbDelete(colName, id) {
@@ -2342,56 +2303,40 @@ function addReport(status) {
   if(!title) { showToast('⚠️ يرجى إدخال عنوان التقرير','#DC2626'); return; }
   if(!content && !reportFile) { showToast('⚠️ يرجى كتابة محتوى أو إرفاق ملف','#DC2626'); return; }
 
-  // Capture ALL form values BEFORE closing modal
-  var deptVal = parseInt($('newReportDept')?.value)||null;
-  var typeVal = $('newReportType')?.value||'progress';
+  // Show uploading state
+  showToast('⏳ جاري رفع الملفات...','var(--blue)');
   var localFile = reportFile ? Object.assign({},reportFile) : null;
   var localImages = reportImages.length>0 ? reportImages.slice() : null;
   reportFile=null; reportImages=[];
   hideModal();
 
-  // SAVE IMMEDIATELY — don't wait for upload
-  var newId = Date.now();
-  var fileMeta = localFile ? {name:localFile.name,size:localFile.size,type:localFile.type} : null;
-  var imgsMeta = localImages ? localImages.map(function(img){return {name:img.name,size:img.size}}) : null;
-  reports.push({id:newId,title:title,content:content,author:currentUser.id,date:today(),dept:deptVal,status:st,type:typeVal,file:fileMeta,images:imgsMeta});
-  renderReports(); saveSession();
+  // Upload files to Firebase Storage, then save
+  var uploadFile = localFile ? uploadToStorage(localFile, 'reports') : Promise.resolve(null);
+  var uploadImgs = localImages ? uploadImagesToStorage(localImages) : Promise.resolve(null);
 
-  var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
-  var toastColor = st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)';
-  showToast(toastMsg, toastColor);
+  Promise.all([uploadFile, uploadImgs]).then(function(results) {
+    var cloudFile = results[0];
+    var cloudImages = results[1];
+    reports.push({id:Date.now(),title:title,content:content,author:currentUser.id,date:today(),dept:parseInt($('newReportDept')?.value)||null,status:st,type:$('newReportType')?.value||'progress',file:cloudFile,images:cloudImages});
+    renderReports(); saveSession();
 
-  // Email notifications
-  if(st==='pending_approval') {
-    var rptBody = emailBody('📝','تقرير جديد بانتظار الموافقة',
-      [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#D97706');
-    notifyAdmin('تقرير جديد بانتظار الموافقة: '+title, rptBody);
-    notifySupervisors('تقرير جديد بانتظار الموافقة: '+title, rptBody);
-  }
-  if(st==='published') {
-    var pubBody = emailBody('📝','تم نشر تقرير جديد',
-      [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#059669');
-    notifySupervisors('تقرير جديد منشور: '+title, pubBody);
-  }
+    var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
+    var toastColor = st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)';
+    showToast(toastMsg, toastColor);
 
-  // Upload files in BACKGROUND — update report when done
-  if(localFile && localFile.data) {
-    uploadToStorage(localFile, 'reports').then(function(cloudFile) {
-      if(cloudFile && cloudFile.url) {
-        var rpt = reports.find(function(r){return r.id===newId});
-        if(rpt) { rpt.file = cloudFile; saveSession(); renderReports(); }
-        showToast('📎 تم رفع المرفق بنجاح','#059669');
-      }
-    }).catch(function(e){ console.warn('Report file upload failed:', e); });
-  }
-  if(localImages && localImages.length) {
-    uploadImagesToStorage(localImages).then(function(cloudImages) {
-      if(cloudImages) {
-        var rpt = reports.find(function(r){return r.id===newId});
-        if(rpt) { rpt.images = cloudImages; saveSession(); renderReports(); }
-      }
-    }).catch(function(e){ console.warn('Report images upload failed:', e); });
-  }
+    // Email notifications
+    if(st==='pending_approval') {
+      var rptBody = emailBody('📝','تقرير جديد بانتظار الموافقة',
+        [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#D97706');
+      notifyAdmin('تقرير جديد بانتظار الموافقة: '+title, rptBody);
+      notifySupervisors('تقرير جديد بانتظار الموافقة: '+title, rptBody);
+    }
+    if(st==='published') {
+      var pubBody = emailBody('📝','تم نشر تقرير جديد',
+        [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#059669');
+      notifySupervisors('تقرير جديد منشور: '+title, pubBody);
+    }
+  }).catch(function(e){ console.error('Report save error:', e); showToast('⚠️ حدث خطأ','#DC2626'); });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2563,30 +2508,25 @@ function addApproval() {
   var localType = $('newApprovalType').value;
   selectedUrgency='normal'; approvalFile=null;
   hideModal();
+  showToast('⏳ جاري رفع الطلب...','var(--blue)');
 
-  // SAVE IMMEDIATELY — don't wait for upload
-  var newId = Date.now();
-  approvals.push({id:newId,title:title,notes:localNotes,type:localType,urgency:localUrgency,requester:currentUser.id,date:today(),status:'pending',approvedBy:null,approvedAt:null,file:localFile?{name:localFile.name,size:localFile.size,type:localFile.type}:null});
-  updatePendingBadge(); renderApprovals(); saveSession();
-  showToast('✅ تم رفع طلب الموافقة','#059669');
+  var uploadFile = localFile ? uploadToStorage(localFile, 'approvals') : Promise.resolve(null);
+  uploadFile.then(function(cloudFile) {
+    approvals.push({id:Date.now(),title:title,notes:localNotes,type:localType,urgency:localUrgency,requester:currentUser.id,date:today(),status:'pending',approvedBy:null,approvedAt:null,file:cloudFile});
+    updatePendingBadge(); renderApprovals(); saveSession();
+    showToast('✅ تم رفع طلب الموافقة','#059669');
 
-  // Email notification to supervisors
-  var urgColor = localUrgency==='urgent'?'#DC2626':'#D97706';
-  var urgLabel = localUrgency==='urgent'?'🔴 عاجل':'⏳ عادي';
-  notifySupervisors('طلب موافقة جديد: '+title, emailBody(
-    localUrgency==='urgent'?'🔴':'📋', 'طلب موافقة جديد',
-    [{label:'العنوان',value:title},{label:'مقدم الطلب',value:currentUser.name},{label:'الأولوية',value:urgLabel},{label:'التاريخ',value:today()}], urgColor));
-
-  // Upload file in BACKGROUND — update approval when done
-  if(localFile && localFile.data) {
-    uploadToStorage(localFile, 'approvals').then(function(cloudFile) {
-      if(cloudFile && cloudFile.url) {
-        var appr = approvals.find(function(a){return a.id===newId});
-        if(appr) { appr.file = cloudFile; saveSession(); }
-        showToast('📎 تم رفع المرفق بنجاح','#059669');
-      }
-    }).catch(function(e){ console.warn('File upload failed:', e); });
-  }
+    // Email notification to supervisors
+    var appr = approvals[approvals.length-1];
+    var urgColor = appr.urgency==='urgent'?'#DC2626':'#D97706';
+    var urgLabel = appr.urgency==='urgent'?'🔴 عاجل':'⏳ عادي';
+    notifySupervisors('طلب موافقة جديد: '+title, emailBody(
+      appr.urgency==='urgent'?'🔴':'📋',
+      'طلب موافقة جديد',
+      [{label:'العنوان',value:title},{label:'مقدم الطلب',value:currentUser.name},{label:'الأولوية',value:urgLabel},{label:'التاريخ',value:today()}],
+      urgColor
+    ));
+  }).catch(function(e){ console.error('Approval save error:', e); });
 }
 
 // ═══════════════════════════════════════════════════════════════
