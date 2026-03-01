@@ -484,6 +484,17 @@ body {
   .topbar { padding: 0 12px; }
   .login-card { padding: 28px 22px; }
 }
+/* Searchable dropdown */
+.search-select-wrap { position:relative; }
+.search-select-input { width:100%;padding:10px 14px;border:1.5px solid #E2E8F0;border-radius:10px;font-size:14px;font-family:Tajawal,sans-serif;background:#fff;direction:rtl;box-sizing:border-box;transition:border 0.2s; }
+.search-select-input:focus { border-color:var(--gold);outline:none;box-shadow:0 0 0 3px rgba(200,164,92,0.1); }
+.search-select-list { position:absolute;top:100%;right:0;left:0;background:#fff;border:1.5px solid #E2E8F0;border-radius:10px;margin-top:4px;max-height:200px;overflow-y:auto;z-index:999;display:none;box-shadow:0 8px 24px rgba(0,0,0,0.12); }
+.search-select-list.open { display:block; }
+.search-select-item { padding:10px 14px;cursor:pointer;font-size:13px;font-family:Tajawal,sans-serif;display:flex;justify-content:space-between;align-items:center;transition:background 0.15s; }
+.search-select-item:hover,.search-select-item.highlighted { background:#F8F4EC; }
+.search-select-item .ss-badge { font-size:10px;padding:2px 8px;border-radius:6px;font-weight:700; }
+.search-select-item .ss-me { background:#ECFDF5;color:#059669; }
+.search-select-item .ss-role { background:#EFF6FF;color:#2563EB; }
 </style>
 <!-- Firebase loaded dynamically -->
 <!-- EmailJS loaded dynamically -->
@@ -665,6 +676,7 @@ var firebaseConfig = {
 };
 var auth = null;
 var db = null;
+var storage = null;
 var _fbReady = false;
 var _fbListenersActive = false;
 var _suppressSync = false;
@@ -677,7 +689,8 @@ function loadFirebaseScripts() {
   var scripts = [
     'https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js',
     'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js',
-    'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js'
+    'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js',
+    'https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js'
   ];
   var loaded = 0;
   scripts.forEach(function(src, idx) {
@@ -704,6 +717,7 @@ function initFirebase() {
     firebase.initializeApp(firebaseConfig);
     auth = firebase.auth();
     db = firebase.firestore();
+    storage = firebase.storage();
     db.enablePersistence({synchronizeTabs:true}).catch(function(err){console.log('Persistence:',err.code)});
     _firebaseAvailable = true;
     console.log('🔥 Firebase initialized');
@@ -751,10 +765,57 @@ function startOfflineMode() {
 function cleanForDb(obj) {
   if(!obj) return obj;
   var c = Object.assign({}, obj);
-  if(c.file && c.file.data) c.file = {name:c.file.name,size:c.file.size,type:c.file.type};
-  if(c.responseFile && c.responseFile.data) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type};
-  if(c.images && c.images.length) c.images = c.images.map(function(img){return {name:img.name,size:img.size}});
+  // Keep URLs, only strip base64 data
+  if(c.file) {
+    if(c.file.url) c.file = {name:c.file.name,size:c.file.size,type:c.file.type,url:c.file.url};
+    else if(c.file.data) c.file = {name:c.file.name,size:c.file.size,type:c.file.type};
+  }
+  if(c.responseFile) {
+    if(c.responseFile.url) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type,url:c.responseFile.url};
+    else if(c.responseFile.data) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type};
+  }
+  if(c.images && c.images.length) c.images = c.images.map(function(img){
+    if(img.url) return {name:img.name,size:img.size,url:img.url};
+    return {name:img.name,size:img.size};
+  });
   return c;
+}
+
+// ═══════════════════════════════════════
+// FIREBASE STORAGE — Cloud File Storage
+// ═══════════════════════════════════════
+function uploadToStorage(fileObj, folder) {
+  if(!storage || !_firebaseAvailable || !fileObj || !fileObj.data) return Promise.resolve(fileObj);
+  try {
+    var parts = fileObj.data.split(',');
+    var mime = parts[0].match(/:(.*?);/)[1];
+    var bstr = atob(parts[1]);
+    var arr = new Uint8Array(bstr.length);
+    for(var i=0;i<bstr.length;i++) arr[i]=bstr.charCodeAt(i);
+    var blob = new Blob([arr], {type: mime});
+  } catch(e) {
+    console.error('📁 File conversion error:', e);
+    return Promise.resolve(fileObj);
+  }
+  var path = 'files/' + folder + '/' + Date.now() + '_' + (fileObj.name||'file');
+  return storage.ref(path).put(blob).then(function(snap) {
+    return snap.ref.getDownloadURL();
+  }).then(function(url) {
+    console.log('📁 Uploaded:', fileObj.name, '→', url);
+    return {name: fileObj.name, size: fileObj.size, type: fileObj.type, url: url};
+  }).catch(function(err) {
+    console.error('📁 Upload failed:', err.code, err.message);
+    showToast('⚠️ فشل رفع الملف — سيُحفظ محلياً فقط','#D97706');
+    return fileObj;
+  });
+}
+
+function uploadImagesToStorage(images) {
+  if(!storage || !_firebaseAvailable || !images || !images.length) return Promise.resolve(images||[]);
+  return Promise.all(images.map(function(img) {
+    if(img.url) return Promise.resolve(img);
+    return uploadToStorage(img, 'images');
+  }));
 }
 
 // Save a collection to Firestore
@@ -805,6 +866,25 @@ function fbLoadAll() {
     if(results[9].exists) try{timelinePhases=JSON.parse(results[9].data().data)}catch(e){}
     if(results[10].exists) try{orgReportSections=JSON.parse(results[10].data().data)}catch(e){}
     console.log('🔥 Firebase data loaded');
+    // Merge file data from localStorage cache (Firestore strips large files)
+    try {
+      var cachedR = JSON.parse(localStorage.getItem('fintech_reports')||'[]');
+      var cachedA = JSON.parse(localStorage.getItem('fintech_approvals')||'[]');
+      reports.forEach(function(r){
+        if(!r.file || !r.file.data) {
+          var cr = cachedR.find(function(x){return String(x.id)===String(r.id)});
+          if(cr && cr.file && cr.file.data) r.file = cr.file;
+          if(cr && cr.images) r.images = cr.images;
+        }
+      });
+      approvals.forEach(function(a){
+        if(!a.file || !a.file.data) {
+          var ca = cachedA.find(function(x){return String(x.id)===String(a.id)});
+          if(ca && ca.file && ca.file.data) a.file = ca.file;
+          if(ca && ca.responseFile && ca.responseFile.data) a.responseFile = ca.responseFile;
+        }
+      });
+    } catch(e){}
     return true;
   });
 }
@@ -816,8 +896,15 @@ function fbListen() {
   var cols = [
     {name:'members', target:function(d){members=d}},
     {name:'tasks', target:function(d){tasks=d}},
-    {name:'reports', target:function(d){reports=d}},
-    {name:'approvals', target:function(d){approvals=d}},
+    {name:'reports', target:function(d){
+      // Preserve file data from local copies (Firestore strips base64)
+      d.forEach(function(nr){ var old=reports.find(function(o){return String(o.id)===String(nr.id)}); if(old){ if(old.file&&(old.file.data||old.file.url)&&(!nr.file||(!nr.file.data&&!nr.file.url))) nr.file=old.file; if(old.images&&old.images.length) nr.images=old.images; } });
+      reports=d;
+    }},
+    {name:'approvals', target:function(d){
+      d.forEach(function(na){ var old=approvals.find(function(o){return String(o.id)===String(na.id)}); if(old){ if(old.file&&(old.file.data||old.file.url)&&(!na.file||(!na.file.data&&!na.file.url))) na.file=old.file; if(old.responseFile&&(old.responseFile.data||old.responseFile.url)&&(!na.responseFile||(!na.responseFile.data&&!na.responseFile.url))) na.responseFile=old.responseFile; } });
+      approvals=d;
+    }},
     {name:'announcements', target:function(d){announcements=d}},
     {name:'companies', target:function(d){companies=d}},
     {name:'warnings', target:function(d){warnings=d}},
@@ -1013,9 +1100,103 @@ let selectedDept = null;
 // HELPERS
 // ═══════════════════════════════════════════════════════════════
 const $ = id => document.getElementById(id);
-const getMember = id => members.find(m => m.id === id);
-const getTeam = id => { for(const d of DEPARTMENTS){const t=d.teams.find(t=>t.id===id);if(t)return{...t,dept:d}} return null; };
-const getDept = id => DEPARTMENTS.find(d => d.id === id);
+const getMember = id => members.find(m => String(m.id) === String(id));
+const getTeam = id => { for(const d of DEPARTMENTS){const t=d.teams.find(t=>t.id==id);if(t)return{...t,dept:d}} return null; };
+const getDept = id => DEPARTMENTS.find(d => d.id==id);
+
+// ═══════════════════════════════════════════════════════════════
+// SEARCHABLE MEMBER DROPDOWN
+// ═══════════════════════════════════════════════════════════════
+function buildSearchSelect(containerId, opts) {
+  // opts: { members: [...], filterRole: 'member'|null, placeholder, hiddenInputId, showCurrentFirst: true }
+  var el = document.getElementById(containerId);
+  if(!el) return;
+  var filterRole = opts.filterRole || null;
+  var placeholder = opts.placeholder || 'ابحث باسم العضو...';
+  var hiddenId = opts.hiddenInputId || containerId+'_val';
+  var list = (filterRole ? members.filter(function(m){return m.role===filterRole}) : members).slice();
+
+  // Current user first
+  if(opts.showCurrentFirst !== false && currentUser) {
+    list.sort(function(a,b){
+      if(String(a.id)===String(currentUser.id)) return -1;
+      if(String(b.id)===String(currentUser.id)) return 1;
+      return a.name.localeCompare(b.name,'ar');
+    });
+  }
+
+  var roleLabels = {admin:'مدير',supervisor:'مشرف',member:'عضو'};
+  var html = '<div class="search-select-wrap">' +
+    '<input type="hidden" id="'+hiddenId+'">' +
+    '<input type="text" class="search-select-input" id="'+containerId+'_input" placeholder="'+placeholder+'" autocomplete="off">' +
+    '<div class="search-select-list" id="'+containerId+'_list">';
+
+  list.forEach(function(m){
+    var isMe = String(m.id)===String(currentUser.id);
+    var team = getTeam(m.teamId);
+    var teamName = team ? team.name : '';
+    var badges = '';
+    if(isMe) badges += '<span class="ss-badge ss-me">أنا</span> ';
+    badges += '<span class="ss-badge ss-role">'+roleLabels[m.role]+'</span>';
+    html += '<div class="search-select-item" data-id="'+m.id+'" data-name="'+m.name+'" data-dept="'+(m.dept||0)+'" data-team="'+(m.teamId||0)+'">' +
+      '<div><span style="font-weight:700">'+m.name+'</span>'+(teamName?' <span style="font-size:11px;color:var(--slate-400)">— '+teamName+'</span>':'')+'</div>' +
+      '<div>'+badges+'</div></div>';
+  });
+  html += '</div></div>';
+  el.innerHTML = html;
+
+  // Wire up search
+  var inp = document.getElementById(containerId+'_input');
+  var listEl = document.getElementById(containerId+'_list');
+  var hiddenInp = document.getElementById(hiddenId);
+
+  inp.addEventListener('focus', function(){ listEl.classList.add('open'); });
+  inp.addEventListener('input', function(){
+    var q = inp.value.trim().toLowerCase();
+    var items = listEl.querySelectorAll('.search-select-item');
+    items.forEach(function(it){
+      var name = it.getAttribute('data-name').toLowerCase();
+      it.style.display = (!q || name.indexOf(q)!==-1) ? '' : 'none';
+    });
+    listEl.classList.add('open');
+  });
+
+  listEl.addEventListener('click', function(e){
+    var item = e.target.closest('.search-select-item');
+    if(!item) return;
+    hiddenInp.value = item.getAttribute('data-id');
+    inp.value = item.getAttribute('data-name');
+    listEl.classList.remove('open');
+    // Trigger change event for filtering
+    if(opts.onChange) opts.onChange(item.getAttribute('data-id'));
+  });
+
+  document.addEventListener('click', function(e){
+    if(!el.contains(e.target)) listEl.classList.remove('open');
+  });
+
+  // Pre-select default value (current user for companies)
+  if(opts.defaultValue) {
+    var defMember = list.find(function(m){return String(m.id)===String(opts.defaultValue)});
+    if(defMember) {
+      hiddenInp.value = defMember.id;
+      inp.value = defMember.name;
+    }
+  }
+}
+
+// Get sorted members with current user first
+function getSortedMembers(filterRole) {
+  var list = filterRole ? members.filter(function(m){return m.role===filterRole}) : members.slice();
+  if(currentUser) {
+    list.sort(function(a,b){
+      if(String(a.id)===String(currentUser.id)) return -1;
+      if(String(b.id)===String(currentUser.id)) return 1;
+      return a.name.localeCompare(b.name,'ar');
+    });
+  }
+  return list;
+}
 const isHR = () => currentUser.dept === 5 || currentUser.role === 'admin';
 const badge = (text, color, bg) => `<span class="badge" style="background:${bg||color+'18'};color:${color}">${text}</span>`;
 const today = () => new Date().toISOString().slice(0,10);
@@ -1351,12 +1532,12 @@ function buildNav() {
     {id:'dashboard',icon:'📊',label:'لوحة التحكم'},
     ...(currentUser.role!=='supervisor'?[{id:'tasks',icon:'✅',label:'المهام'}]:[]),
     {id:'reports',icon:'📝',label:'التقارير'},
-    ...(currentUser.role!=='member'||currentUser.dept===5?[{id:'approvals',icon:'📋',label:'الموافقات'}]:[]),
+    ...(currentUser.role!=='member'||currentUser.dept==5?[{id:'approvals',icon:'📋',label:'الموافقات'}]:[]),
     {id:'announcements',icon:'📢',label:'لوحة الإعلانات'},
     ...(currentUser.role!=='supervisor'?[{id:'teams',icon:'👥',label:'الفرق والأعضاء'}]:[]),
-    ...(currentUser.role==='admin'||currentUser.dept===5?[{id:'structure',icon:'🏛️',label:'الهيكل التنظيمي'}]:[]),
+    ...(currentUser.role==='admin'||currentUser.dept==5?[{id:'structure',icon:'🏛️',label:'الهيكل التنظيمي'}]:[]),
     ...(currentUser.role!=='supervisor'?[{id:'timeline',icon:'📅',label:'الجدول الزمني'}]:[]),
-    ...((currentUser.role==='admin'||currentUser.dept===5)?[{id:'warnings',icon:'⚠️',label:'الإنذارات'}]:[]),
+    ...((currentUser.role==='admin'||currentUser.dept==5)?[{id:'warnings',icon:'⚠️',label:'الإنذارات'}]:[]),
     ...(currentUser.role!=='supervisor'?[{id:'companies',icon:'🏢',label:'الشركات والشراكات'}]:[]),
     {id:'wbs',icon:'📐',label:'مرجعيات المشروع'},
     {id:'bugs',icon:'📢',label:'بلاغات المشاكل'},
@@ -1371,7 +1552,7 @@ function buildNav() {
 function updatePendingBadge() {
   const c = pendingCount();
   const b = $('pendingBadge');
-  if(c > 0 && (currentUser.role !== 'member' || currentUser.dept===5)) { b.style.display='inline-block'; b.textContent=c+' موافقة معلقة'; }
+  if(c > 0 && (currentUser.role !== 'member' || currentUser.dept==5)) { b.style.display='inline-block'; b.textContent=c+' موافقة معلقة'; }
   else { b.style.display='none'; }
 }
 
@@ -1388,7 +1569,7 @@ function navigate(page) {
   if(currentUser.role==='supervisor' && ['tasks','teams','timeline','companies','structure','warnings'].indexOf(page)!==-1) {
     page = 'dashboard';
   }
-  if(currentUser.role==='member' && ['warnings','structure'].indexOf(page)!==-1 && currentUser.dept!==5) {
+  if(currentUser.role==='member' && ['warnings','structure'].indexOf(page)!==-1 && currentUser.dept!=5) {
     page = 'dashboard';
   }
   if(currentPage && currentPage !== page) navHistory.push(currentPage);
@@ -1443,7 +1624,7 @@ function closeModal(e) { if(e.target === $('modalOverlay')) hideModal(); }
 // ═══════════════════════════════════════════════════════════════
 function renderDashboard() {
   if(currentUser.role==='supervisor') { renderSupervisorDashboard(); return; }
-  const myTasks = (currentUser.role==='member' && currentUser.dept!==5) ? tasks.filter(t=>t.assignedTo===currentUser.id) : tasks;
+  const myTasks = (currentUser.role==='member' && currentUser.dept!=5) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
   const total=myTasks.length, completed=myTasks.filter(t=>t.status==='completed').length;
   const inProg=myTasks.filter(t=>t.status==='in_progress').length, delayed=myTasks.filter(t=>t.status==='delayed').length;
   const notStarted=myTasks.filter(t=>t.status==='not_started').length;
@@ -1470,7 +1651,7 @@ function renderDashboard() {
     </div>
 
     ${(function(){
-      var myWarns = warnings.filter(w=>w.targetId===currentUser.id && w.status==='active');
+      var myWarns = warnings.filter(w=>String(w.targetId)===String(currentUser.id) && w.status==='active');
       if(myWarns.length===0) return '';
       var sevMap = {warning:{label:'تنبيه',color:'#D97706',bg:'#FEF3C7',icon:'⚠️'},violation:{label:'إنذار رسمي',color:'#DC2626',bg:'#FEF2F2',icon:'🔴'},notice:{label:'ملاحظة',color:'#2563EB',bg:'#EFF6FF',icon:'📌'}};
       return '<div class="animate-in" style="margin-bottom:20px">' +
@@ -1484,7 +1665,7 @@ function renderDashboard() {
     })()}
 
     ${(function(){
-      var myReturned = reports.filter(r=>r.status==='returned'&&r.author===currentUser.id);
+      var myReturned = reports.filter(r=>r.status==='returned'&&String(r.author)===String(currentUser.id));
       if(myReturned.length===0) return '';
       return '<div class="card mb-24 animate-in" style="border:2px solid #DC2626;background:linear-gradient(135deg,#FEF2F2,#fff)">' +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
@@ -1775,7 +1956,7 @@ function renderSupervisorDashboard() {
 let taskFilter = 'all', taskDeptFilter = 'all';
 
 function renderTasks() {
-  let myTasks = (currentUser.role==='member' && currentUser.dept!==5) ? tasks.filter(t=>t.assignedTo===currentUser.id) : tasks;
+  let myTasks = (currentUser.role==='member' && currentUser.dept!=5) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
   let filtered = myTasks.filter(t => {
     if(taskFilter!=='all' && t.status!==taskFilter) return false;
     if(taskDeptFilter!=='all' && t.dept!==parseInt(taskDeptFilter)) return false;
@@ -1813,7 +1994,7 @@ function renderTasks() {
             <span>📊 ${t.progress}%</span>
           </div>
           <div class="progress-bar mt-10"><div class="progress-fill" style="width:${t.progress}%;background:${STATUS[t.status].color}"></div></div>
-          ${(currentUser.role==='admin'||currentUser.dept===5||t.assignedTo===currentUser.id)?`
+          ${(currentUser.role==='admin'||currentUser.dept==5||String(t.assignedTo)===String(currentUser.id))?`
             <div class="task-actions">
               ${t.status!=='completed'?`<button class="btn btn-success btn-sm" onclick="updateTask(${t.id},'completed',100)">✅ إنجاز</button>`:''}
               ${t.status==='completed'?`<button class="btn btn-danger btn-sm" onclick="updateTask(${t.id},'in_progress',80)">↩️ تراجع</button>`:''}
@@ -1836,21 +2017,42 @@ function showAddTaskModal() {
   showModal('➕ إضافة مهمة جديدة', `
     <div class="form-group"><label class="form-label">عنوان المهمة</label><input class="form-input" id="newTaskTitle" placeholder="اكتب عنوان المهمة..."></div>
     <div class="form-group"><label class="form-label">الوصف</label><textarea class="form-textarea" id="newTaskDesc" placeholder="وصف تفصيلي للمهمة..."></textarea></div>
-    <div class="form-group"><label class="form-label">الإدارة</label><select class="form-select" id="newTaskDept" onchange="filterTaskTeams();filterTaskMembers()">
-      <option value="">اختر الإدارة...</option>${DEPARTMENTS.map(d=>`<option value="${d.id}">${d.icon} ${d.name}</option>`).join('')}
+    <div class="form-group"><label class="form-label">الإدارة</label><select class="form-select" id="newTaskDept" onchange="filterTaskTeams();filterTaskMembersSearch()">
+      <option value="">جميع الإدارات</option>${DEPARTMENTS.map(d=>`<option value="${d.id}">${d.icon} ${d.name}</option>`).join('')}
     </select></div>
-    <div class="form-group"><label class="form-label">الفريق</label><select class="form-select" id="newTaskTeam" onchange="filterTaskMembers()">
+    <div class="form-group"><label class="form-label">الفريق</label><select class="form-select" id="newTaskTeam" onchange="filterTaskMembersSearch()">
       <option value="">كل الفرق</option>
     </select></div>
-    <div class="form-group"><label class="form-label">إسناد إلى</label><select class="form-select" id="newTaskAssign">
-      <option value="">اختر العضو...</option>${members.filter(m=>m.role==='member').map(m=>`<option value="${m.id}" data-dept="${m.dept||0}" data-team="${m.teamId||0}">${m.name}</option>`).join('')}
-    </select></div>
+    <div class="form-group"><label class="form-label">إسناد إلى</label><div id="taskAssignContainer"></div></div>
     <div class="form-group"><label class="form-label">الأولوية</label><select class="form-select" id="newTaskPriority">
       ${Object.entries(PRIORITY).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}
     </select></div>
     <div class="form-group"><label class="form-label">الموعد النهائي</label><input class="form-input" id="newTaskDeadline" type="date"></div>
     <button class="btn btn-primary btn-lg btn-block" onclick="addTask()">إضافة المهمة</button>
   `);
+  // Initialize searchable dropdown
+  buildSearchSelect('taskAssignContainer', {
+    filterRole: null,
+    placeholder: '🔍 ابحث باسم العضو...',
+    hiddenInputId: 'newTaskAssign',
+    showCurrentFirst: true
+  });
+}
+
+function filterTaskMembersSearch() {
+  var deptId = parseInt(document.getElementById('newTaskDept')?.value) || 0;
+  var teamId = parseInt(document.getElementById('newTaskTeam')?.value) || 0;
+  var listEl = document.getElementById('taskAssignContainer_list');
+  if(!listEl) return;
+  var items = listEl.querySelectorAll('.search-select-item');
+  items.forEach(function(it){
+    var d = parseInt(it.getAttribute('data-dept'))||0;
+    var t = parseInt(it.getAttribute('data-team'))||0;
+    var show = true;
+    if(deptId && d && d !== deptId) show = false;
+    if(teamId && t && t !== teamId) show = false;
+    it.style.display = show ? '' : 'none';
+  });
 }
 
 function addTask() {
@@ -1894,12 +2096,12 @@ function renderReports() {
   var visibleReports = reports.filter(function(r) {
     if(r.status==='published') return true;
     if(currentUser.role==='admin') return true;
-    if(r.author===currentUser.id) return true;
+    if(String(r.author)===String(currentUser.id)) return true;
     return false;
   });
   var pendingForAdmin = reports.filter(function(r){return r.status==='pending_approval'}).length;
-  var returnedForMe = reports.filter(function(r){return r.status==='returned'&&r.author===currentUser.id}).length;
-  var returnedReports = reports.filter(function(r){return r.status==='returned'&&r.author===currentUser.id});
+  var returnedForMe = reports.filter(function(r){return r.status==='returned'&&String(r.author)===String(currentUser.id)}).length;
+  var returnedReports = reports.filter(function(r){return r.status==='returned'&&String(r.author)===String(currentUser.id)});
   $('mainContent').innerHTML = `
     <div class="flex-between page-header animate-in">
       <div><div class="page-title">التقارير</div><div class="page-sub">${visibleReports.length} تقرير${currentUser.role==='admin'&&pendingForAdmin>0?' — <span style="color:#D97706;font-weight:800">'+pendingForAdmin+' بانتظار موافقتك</span>':''}</div></div>
@@ -1921,8 +2123,8 @@ function renderReports() {
               </div>
               <div style="font-size:16px;font-weight:700;margin-bottom:4px">${r.title}</div>
               <div style="font-size:13px;color:var(--slate-500);line-height:1.7">${r.content?(r.content.slice(0,200)+(r.content.length>200?'...':'')):'(تقرير بملف مرفق)'}</div>
-              ${r.file?`<div onclick="openReportFile(${r.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${r.file.data?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${r.file.data?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${r.file.data?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${r.file.data?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${r.file.data?'#EFF6FF':'#F1F5F9'}'">📎 ${r.file.name} (${r.file.size}) ${r.file.data?'— اضغط للتحميل ⬇️':''}</div>`:''}
-              ${r.images&&r.images.length>0?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${r.images.map(function(img,imgIdx){return '<img src="'+img.data+'" onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid var(--slate-200);cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">'}).join('')}</div>`:''}
+              ${r.file?`<div onclick="openReportFile(${r.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${(r.file.data||r.file.url)?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${(r.file.data||r.file.url)?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${(r.file.data||r.file.url)?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${(r.file.data||r.file.url)?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${(r.file.data||r.file.url)?'#EFF6FF':'#F1F5F9'}'">📎 ${r.file.name} (${r.file.size}) ${(r.file.data||r.file.url)?'— اضغط للتحميل ⬇️':''}</div>`:''}
+              ${r.images&&r.images.length>0?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${r.images.map(function(img,imgIdx){return '<img src="'+(img.url||img.data)+'" onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid var(--slate-200);cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">'}).join('')}</div>`:''}
               <div style="font-size:12px;color:var(--slate-400);margin-top:8px">✍️ ${author?.name||''} — 📅 ${r.date}</div>
               ${r.rejectReason?`<div style="margin-top:8px;padding:10px 14px;background:#FEF2F2;border-radius:8px;border:1px solid #FECACA"><span style="font-size:12px;color:#DC2626;font-weight:700">↩️ سبب الإرجاع:</span> <span style="font-size:12px;color:#991B1B">${r.rejectReason}</span></div>`:''}
             </div>
@@ -1931,8 +2133,8 @@ function renderReports() {
                 <button style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;background:linear-gradient(135deg,#059669,#047857);color:#fff;transition:all 0.2s" onclick="approveReport(${r.id})" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform=''">✅ موافقة ونشر</button>
                 <button class="btn btn-sm" style="background:#FEF2F2;color:#DC2626;font-weight:700" onclick="rejectReport(${r.id})">↩️ إرجاع للعضو</button>`:''}
               ${r.status==='draft'&&currentUser.role==='admin'?`<button style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;background:linear-gradient(135deg,#059669,#047857);color:#fff;transition:all 0.2s" onclick="publishReport(${r.id})" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform=''">📤 نشر</button>`:''}
-              ${r.status==='returned'&&r.author===currentUser.id?`<button style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#fff;transition:all 0.2s" onclick="resubmitReport(${r.id})">📤 إعادة الرفع</button>`:''}
-              ${(currentUser.role==='admin'||r.author===currentUser.id)?`<button class="btn btn-danger btn-sm" onclick="deleteReport(${r.id})">🗑️ حذف</button>`:''}
+              ${r.status==='returned'&&String(r.author)===String(currentUser.id)?`<button style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#fff;transition:all 0.2s" onclick="resubmitReport(${r.id})">📤 إعادة الرفع</button>`:''}
+              ${(currentUser.role==='admin'||String(r.author)===String(currentUser.id))?`<button class="btn btn-danger btn-sm" onclick="deleteReport(${r.id})">🗑️ حذف</button>`:''}
             </div>
           </div>
         </div>`;
@@ -1983,7 +2185,7 @@ function viewReportImage(reportId, imgIdx) {
   var total = rpt.images.length;
   showModal('🖼️ صورة '+(imgIdx+1)+' من '+total+' — '+rpt.title,
     '<div style="text-align:center">' +
-    '<img src="'+img.data+'" style="max-width:100%;max-height:70vh;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1)">' +
+    '<img src="'+(img.url||img.data)+'" style="max-width:100%;max-height:70vh;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1)">' +
     '<div style="margin-top:12px;display:flex;gap:8px;justify-content:center">' +
     (imgIdx>0?'<button class="btn btn-secondary" onclick="viewReportImage('+reportId+','+(imgIdx-1)+')">→ السابقة</button>':'') +
     (imgIdx<total-1?'<button class="btn btn-secondary" onclick="viewReportImage('+reportId+','+(imgIdx+1)+')">← التالية</button>':'') +
@@ -2069,7 +2271,7 @@ function showAddReportModal() {
       <div id="reportFileZone" onclick="document.getElementById('reportFileInput').click()" style="border:2px dashed var(--slate-300);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--slate-50)">
         <div style="font-size:32px;margin-bottom:8px">📎</div>
         <div style="font-size:13px;color:var(--slate-500);font-weight:600">اضغط لإرفاق ملف</div>
-        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 2 ميجابايت</div>
+        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 10 ميجابايت</div>
       </div>
       <input type="file" id="reportFileInput" accept=".pdf,.doc,.docx" style="display:none" onchange="handleReportFile(this)">
       <div id="reportFileName" style="display:none;margin-top:8px;padding:10px 14px;background:#ECFDF5;border-radius:8px;font-size:13px;color:var(--green);font-weight:600"></div>
@@ -2100,23 +2302,41 @@ function addReport(status) {
   const title=$('newReportTitle').value.trim(), content=$('newReportContent').value.trim();
   if(!title) { showToast('⚠️ يرجى إدخال عنوان التقرير','#DC2626'); return; }
   if(!content && !reportFile) { showToast('⚠️ يرجى كتابة محتوى أو إرفاق ملف','#DC2626'); return; }
-  reports.push({id:Date.now(),title,content,author:currentUser.id,date:today(),dept:parseInt($('newReportDept').value)||null,status:st,type:$('newReportType').value,file:reportFile||null,images:reportImages.length>0?reportImages.slice():null});
-  reportFile=null;
-  reportImages=[];
-  hideModal(); renderReports();
-  var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
-  var toastColor = st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)';
-  var toast = document.createElement('div');
-  toast.style.cssText = 'position:fixed;top:80px;left:50%;transform:translateX(-50%);background:'+toastColor+';color:#fff;padding:12px 24px;border-radius:12px;font-weight:700;font-size:14px;z-index:10000;animation:slideDown 0.3s ease;box-shadow:0 4px 20px rgba(0,0,0,0.15);font-family:Tajawal,sans-serif;max-width:90%;text-align:center';
-  toast.textContent = toastMsg;
-  document.body.appendChild(toast);
-  setTimeout(function(){toast.remove()},3000);
 
-  // Email notifications
-  if(st==='pending_approval') {
-    notifyAdmin('تقرير جديد بانتظار الموافقة: '+title, emailBody('📝','تقرير جديد بانتظار موافقتك',
-      [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#D97706'));
-  }
+  // Show uploading state
+  showToast('⏳ جاري رفع الملفات...','var(--blue)');
+  var localFile = reportFile ? Object.assign({},reportFile) : null;
+  var localImages = reportImages.length>0 ? reportImages.slice() : null;
+  reportFile=null; reportImages=[];
+  hideModal();
+
+  // Upload files to Firebase Storage, then save
+  var uploadFile = localFile ? uploadToStorage(localFile, 'reports') : Promise.resolve(null);
+  var uploadImgs = localImages ? uploadImagesToStorage(localImages) : Promise.resolve(null);
+
+  Promise.all([uploadFile, uploadImgs]).then(function(results) {
+    var cloudFile = results[0];
+    var cloudImages = results[1];
+    reports.push({id:Date.now(),title:title,content:content,author:currentUser.id,date:today(),dept:parseInt($('newReportDept')?.value)||null,status:st,type:$('newReportType')?.value||'progress',file:cloudFile,images:cloudImages});
+    renderReports(); saveSession();
+
+    var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
+    var toastColor = st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)';
+    showToast(toastMsg, toastColor);
+
+    // Email notifications
+    if(st==='pending_approval') {
+      var rptBody = emailBody('📝','تقرير جديد بانتظار الموافقة',
+        [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#D97706');
+      notifyAdmin('تقرير جديد بانتظار الموافقة: '+title, rptBody);
+      notifySupervisors('تقرير جديد بانتظار الموافقة: '+title, rptBody);
+    }
+    if(st==='published') {
+      var pubBody = emailBody('📝','تم نشر تقرير جديد',
+        [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#059669');
+      notifySupervisors('تقرير جديد منشور: '+title, pubBody);
+    }
+  }).catch(function(e){ console.error('Report save error:', e); showToast('⚠️ حدث خطأ','#DC2626'); });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2148,9 +2368,9 @@ function renderApprovals() {
               ${a.urgency==='urgent'?'<span class="badge" style="background:#FEF2F2;color:#DC2626;animation:pulse 2s ease infinite">🔴 عاجل</span>':''}
               <div style="font-size:16px;font-weight:700;margin:8px 0 4px">${a.title}</div>
               <div style="font-size:13px;color:var(--slate-500)">${a.notes}</div>
-              ${a.file?`<div onclick="openApprovalFile(${a.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${a.file.data?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${a.file.data?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${a.file.data?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${a.file.data?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${a.file.data?'#EFF6FF':'#F1F5F9'}'">📎 ${a.file.name} (${a.file.size}) ${a.file.data?'— اضغط للتحميل ⬇️':''}</div>`:''}
+              ${a.file?`<div onclick="openApprovalFile(${a.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${(a.file.data||a.file.url)?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${(a.file.data||a.file.url)?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${(a.file.data||a.file.url)?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${(a.file.data||a.file.url)?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${(a.file.data||a.file.url)?'#EFF6FF':'#F1F5F9'}'">📎 ${a.file.name} (${a.file.size}) ${(a.file.data||a.file.url)?'— اضغط للتحميل ⬇️':''}</div>`:''}
               ${a.comment?`<div style="padding:10px 14px;border-radius:8px;background:${a.status==='rejected'?'#FEF2F2':'#ECFDF5'};border-right:3px solid ${a.status==='rejected'?'var(--red)':'var(--green)'};margin-top:8px;font-size:12px;color:var(--slate-700)"><strong>${a.status==='rejected'?'سبب الرفض':'تعليق المشرف'}:</strong> ${a.comment}</div>`:''}
-              ${a.responseFile?`<div onclick="openResponseFile(${a.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${a.responseFile.data?'#ECFDF5':'#F1F5F9'};border-radius:8px;font-size:12px;color:${a.responseFile.data?'var(--green)':'var(--slate-400)'};font-weight:600;margin-top:6px;cursor:pointer;border:1px solid ${a.responseFile.data?'#A7F3D0':'#E2E8F0'}">📎 مرفق المشرف: ${a.responseFile.name} ${a.responseFile.data?'— اضغط للتحميل ⬇️':''}</div>`:''}
+              ${a.responseFile?`<div onclick="openResponseFile(${a.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${(a.responseFile.data||a.responseFile.url)?'#ECFDF5':'#F1F5F9'};border-radius:8px;font-size:12px;color:${(a.responseFile.data||a.responseFile.url)?'var(--green)':'var(--slate-400)'};font-weight:600;margin-top:6px;cursor:pointer;border:1px solid ${(a.responseFile.data||a.responseFile.url)?'#A7F3D0':'#E2E8F0'}">📎 مرفق المشرف: ${a.responseFile.name} ${(a.responseFile.data||a.responseFile.url)?'— اضغط للتحميل ⬇️':''}</div>`:''}
               <div style="font-size:12px;color:var(--slate-400);margin-top:8px">
                 👤 مقدم الطلب: ${req?.name||''} — 📅 ${a.date}
                 ${appr?` — ✅ ${appr.name} (${a.approvedAt})`:''}
@@ -2163,7 +2383,7 @@ function renderApprovals() {
                   <button class="btn btn-danger btn-sm" onclick="showApprovalActionModal(${a.id},'rejected')">❌ رفض</button>
                 </div>`:''}
               ${a.status==='pending'&&currentUser.role==='admin'?`<button class="btn btn-sm" style="background:linear-gradient(135deg,#D97706,#B45309);color:#fff;font-weight:700;white-space:nowrap" onclick="remindSupervisorSingle(${a.id})">🔔 تذكير المشرف</button>`:''}
-              ${(currentUser.role==='admin'||a.requester===currentUser.id)?`<button class="btn btn-sm" style="background:#FEF2F2;color:var(--red)" onclick="deleteApproval(${a.id})">🗑️ حذف</button>`:''}
+              ${(currentUser.role==='admin'||String(a.requester)===String(currentUser.id))?`<button class="btn btn-sm" style="background:#FEF2F2;color:var(--red)" onclick="deleteApproval(${a.id})">🗑️ حذف</button>`:''}
             </div>
           </div>
         </div>`;
@@ -2177,8 +2397,8 @@ function handleResponseFile(input) {
   if(!file) return;
   var ext = file.name.split('.').pop().toLowerCase();
   if(!['pdf','doc','docx'].includes(ext)) { showToast('⚠️ PDF أو Word فقط','#DC2626'); input.value=''; return; }
-  if(file.size > 2 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (2 ميجابايت)','#DC2626');
+  if(file.size > 10 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (10 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
@@ -2216,24 +2436,32 @@ function showApprovalActionModal(id, action) {
 function handleApproval(id, action) {
   var comment = document.getElementById('approvalComment')?.value?.trim() || '';
   if(action === 'rejected' && !comment) { showToast('⚠️ يرجى كتابة سبب الرفض','#DC2626'); return; }
-  approvals = approvals.map(function(a) {
-    if(a.id===id) return {...a, status:action, approvedBy:currentUser.id, approvedAt:today(), comment:comment, responseFile:responseFileData||null};
-    return a;
-  });
-  responseFileData = null;
-  hideModal(); updatePendingBadge(); renderApprovals();
 
-  // Email notification to requester
-  var appr = approvals.find(function(a){return a.id===id});
-  if(appr) {
-    var isApproved = action==='approved';
-    notifyMember(appr.requester, (isApproved?'تمت الموافقة':'تم رفض الطلب')+': '+appr.title, emailBody(
-      isApproved?'✅':'❌',
-      isApproved?'تمت الموافقة على طلبك':'تم رفض طلبك',
-      [{label:'العنوان',value:appr.title},{label:'القرار',value:isApproved?'✅ موافق عليه':'❌ مرفوض'},{label:'بواسطة',value:currentUser.name}].concat(comment?[{label:'تعليق',value:comment}]:[]),
-      isApproved?'#059669':'#DC2626'
-    ));
-  }
+  var localResponseFile = responseFileData ? Object.assign({},responseFileData) : null;
+  responseFileData = null;
+  hideModal();
+  showToast('⏳ جاري حفظ القرار...','var(--blue)');
+
+  var uploadResp = localResponseFile ? uploadToStorage(localResponseFile, 'responses') : Promise.resolve(null);
+  uploadResp.then(function(cloudFile) {
+    approvals = approvals.map(function(a) {
+      if(a.id===id) return Object.assign({}, a, {status:action, approvedBy:currentUser.id, approvedAt:today(), comment:comment, responseFile:cloudFile});
+      return a;
+    });
+    updatePendingBadge(); renderApprovals(); saveSession();
+
+    // Email notification to requester
+    var appr = approvals.find(function(a){return a.id===id});
+    if(appr) {
+      var isApproved = action==='approved';
+      notifyMember(appr.requester, (isApproved?'تمت الموافقة':'تم رفض الطلب')+': '+appr.title, emailBody(
+        isApproved?'✅':'❌',
+        isApproved?'تمت الموافقة على طلبك':'تم رفض طلبك',
+        [{label:'العنوان',value:appr.title},{label:'القرار',value:isApproved?'✅ موافق عليه':'❌ مرفوض'},{label:'بواسطة',value:currentUser.name}].concat(comment?[{label:'تعليق',value:comment}]:[]),
+        isApproved?'#059669':'#DC2626'
+      ));
+    }
+  });
 }
 
 function showAddApprovalModal() {
@@ -2253,7 +2481,7 @@ function showAddApprovalModal() {
       <div id="approvalFileZone" onclick="document.getElementById('approvalFileInput').click()" style="border:2px dashed var(--slate-300);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--slate-50)">
         <div style="font-size:32px;margin-bottom:8px">📎</div>
         <div style="font-size:13px;color:var(--slate-500);font-weight:600">اضغط لإرفاق ملف</div>
-        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 2 ميجابايت</div>
+        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 10 ميجابايت</div>
       </div>
       <input type="file" id="approvalFileInput" accept=".pdf,.doc,.docx" style="display:none" onchange="handleApprovalFile(this)">
       <div id="approvalFileName" style="display:none;margin-top:8px;padding:10px 14px;background:#ECFDF5;border-radius:8px;font-size:13px;color:var(--green);font-weight:600"></div>
@@ -2273,21 +2501,32 @@ function setUrgency(val) {
 function addApproval() {
   const title=$('newApprovalTitle').value.trim();
   if(!title) { showToast('⚠️ يرجى إدخال عنوان الطلب','#DC2626'); return; }
-  approvals.push({id:Date.now(),title,notes:$('newApprovalNotes').value,type:$('newApprovalType').value,urgency:selectedUrgency,requester:currentUser.id,date:today(),status:'pending',approvedBy:null,approvedAt:null,file:approvalFile||null});
-  selectedUrgency='normal';
-  approvalFile=null;
-  hideModal(); updatePendingBadge(); renderApprovals();
 
-  // Email notification to supervisors
-  var appr = approvals[approvals.length-1];
-  var urgColor = appr.urgency==='urgent'?'#DC2626':'#D97706';
-  var urgLabel = appr.urgency==='urgent'?'🔴 عاجل':'⏳ عادي';
-  notifySupervisors('طلب موافقة جديد: '+title, emailBody(
-    appr.urgency==='urgent'?'🔴':'📋',
-    'طلب موافقة جديد',
-    [{label:'العنوان',value:title},{label:'مقدم الطلب',value:currentUser.name},{label:'الأولوية',value:urgLabel},{label:'التاريخ',value:today()}],
-    urgColor
-  ));
+  var localFile = approvalFile ? Object.assign({},approvalFile) : null;
+  var localUrgency = selectedUrgency;
+  var localNotes = $('newApprovalNotes').value;
+  var localType = $('newApprovalType').value;
+  selectedUrgency='normal'; approvalFile=null;
+  hideModal();
+  showToast('⏳ جاري رفع الطلب...','var(--blue)');
+
+  var uploadFile = localFile ? uploadToStorage(localFile, 'approvals') : Promise.resolve(null);
+  uploadFile.then(function(cloudFile) {
+    approvals.push({id:Date.now(),title:title,notes:localNotes,type:localType,urgency:localUrgency,requester:currentUser.id,date:today(),status:'pending',approvedBy:null,approvedAt:null,file:cloudFile});
+    updatePendingBadge(); renderApprovals(); saveSession();
+    showToast('✅ تم رفع طلب الموافقة','#059669');
+
+    // Email notification to supervisors
+    var appr = approvals[approvals.length-1];
+    var urgColor = appr.urgency==='urgent'?'#DC2626':'#D97706';
+    var urgLabel = appr.urgency==='urgent'?'🔴 عاجل':'⏳ عادي';
+    notifySupervisors('طلب موافقة جديد: '+title, emailBody(
+      appr.urgency==='urgent'?'🔴':'📋',
+      'طلب موافقة جديد',
+      [{label:'العنوان',value:title},{label:'مقدم الطلب',value:currentUser.name},{label:'الأولوية',value:urgLabel},{label:'التاريخ',value:today()}],
+      urgColor
+    ));
+  }).catch(function(e){ console.error('Approval save error:', e); });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2325,7 +2564,7 @@ function renderAnnouncements() {
           '<span style="padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;background:'+aud.bg+';color:'+aud.c+'">'+aud.l+'</span></div>' +
           '<div style="display:flex;align-items:center;gap:8px">' +
           '<span style="font-size:11px;color:var(--slate-400)">'+a.date+'</span>' +
-          ((currentUser.role==='admin'||a.author===currentUser.id) ?
+          ((currentUser.role==='admin'||String(a.author)===String(currentUser.id)) ?
             '<button onclick="deleteAnnouncement('+a.id+')" style="background:#FEF2F2;border:1px solid #FECACA;cursor:pointer;font-size:12px;color:#DC2626;transition:all 0.2s;padding:4px 10px;border-radius:6px;font-weight:700;font-family:inherit" onmouseover="this.style.background=\'#FEE2E2\'" onmouseout="this.style.background=\'#FEF2F2\'">🗑️ حذف</button>' : '') +
           '</div></div>' +
           (a.title ? '<div style="font-weight:800;font-size:15px;margin-bottom:6px;color:var(--navy)">'+a.title+'</div>' : '') +
@@ -2413,12 +2652,12 @@ function renderTeams() {
   let membersHtml = '';
   if(selectedDept) {
     const dept = getDept(selectedDept);
-    const deptMembers = members.filter(m=>m.dept===selectedDept);
+    const deptMembers = members.filter(m=>m.dept==selectedDept);
     membersHtml = `<div class="card mb-24 animate-scale">
       <div class="card-title mb-16">${dept.icon} أعضاء ${dept.name}</div>
       <div class="grid-3">${deptMembers.map(m=>{
         const team=getTeam(m.teamId);
-        const mt=tasks.filter(t=>t.assignedTo===m.id);
+        const mt=tasks.filter(t=>String(t.assignedTo)===String(m.id));
         const done=mt.filter(t=>t.status==='completed').length;
         return `<div class="member-card">
           <div class="member-avatar" style="background:linear-gradient(135deg,var(--gold),var(--gold-dark))">${m.name.charAt(0)}</div>
@@ -2456,7 +2695,7 @@ function renderTeams() {
             <span style="font-weight:800;font-size:14px">${d.icon} ${d.name}</span>
           </div>
           <div>${d.teams.map(t=>{
-            const tc=members.filter(m=>m.teamId===t.id).length;
+            const tc=members.filter(m=>m.teamId==t.id).length;
             return `<span class="team-chip" style="background:${d.color}08;border:1px solid ${d.color}22;color:${d.color}">${t.name} (${tc})</span>`;
           }).join('')}</div>
         </div>`).join('')}
@@ -2516,7 +2755,7 @@ function renderStructure() {
             <div style="padding:10px 14px;border-radius:10px;background:${d.color}06;border:1px solid ${d.color}15;margin-bottom:8px;display:flex;align-items:center;gap:8px">
               <div style="width:8px;height:8px;border-radius:50%;background:${d.color};flex-shrink:0"></div>
               <span style="font-size:13px;font-weight:600">${t.name}</span>
-              <span style="margin-right:auto;font-size:11px;color:var(--slate-400)">${members.filter(m=>m.teamId===t.id).length} عضو</span>
+              <span style="margin-right:auto;font-size:11px;color:var(--slate-400)">${members.filter(m=>m.teamId==t.id).length} عضو</span>
             </div>`).join('')}
         </div>`).join('')}
     </div>`;
@@ -2701,15 +2940,22 @@ function downloadFile(dataUri, fileName) {
   if(!dataUri) {
     showModal('⚠️ الملف غير متاح',
       '<div style="text-align:center;padding:20px">' +
-      '<div style="font-size:48px;margin-bottom:12px">⚠️</div>' +
-      '<p style="color:#64748B;font-size:14px;line-height:1.8">الملف غير متاح حالياً.<br>يرجى إعادة رفع الملف.</p>' +
+      '<div style="font-size:48px;margin-bottom:12px">📎</div>' +
+      '<p style="font-weight:700;font-size:15px;margin-bottom:8px">الملف غير متاح</p>' +
+      '<p style="color:#64748B;font-size:13px;line-height:1.8">يرجى إعادة رفع الملف.</p>' +
       '<button class="btn btn-secondary" onclick="hideModal()" style="margin-top:16px">إغلاق</button></div>');
     return;
   }
   try {
     var icon = (fileName||'').endsWith('.pdf') ? '📄' : '📝';
 
-    // Try direct download with <a> tag and data URI
+    // If it's a URL (Firebase Storage), open in new tab
+    if(dataUri.startsWith('http')) {
+      window.open(dataUri, '_blank');
+      return;
+    }
+
+    // Base64: direct download
     var a = document.createElement('a');
     a.href = dataUri;
     a.download = fileName || 'file';
@@ -2726,27 +2972,29 @@ function downloadFile(dataUri, fileName) {
       'style="display:inline-flex;align-items:center;gap:8px;padding:14px 28px;' +
       'background:linear-gradient(135deg,#C8A45C,#A8842C);color:#fff;border-radius:12px;' +
       'font-weight:700;font-size:15px;text-decoration:none;font-family:Tajawal,sans-serif;' +
-      'box-shadow:0 4px 16px rgba(200,164,92,0.3)">⬇️ اضغط هنا للتحميل</a>' +
-      '<p style="font-size:11px;color:#94A3B8;margin-top:14px">في الجوال: اضغط مطولاً على زر التحميل ← تنزيل الملف المرتبط</p></div>');
+      'box-shadow:0 4px 16px rgba(200,164,92,0.3)">⬇️ اضغط هنا للتحميل</a></div>');
   } catch(e) {
     showModal('خطأ', '<p style="text-align:center;color:#DC2626;padding:20px">حدث خطأ في فتح الملف: '+e.message+'</p>');
   }
 }
 
 function openReportFile(id) {
-  var r = reports.find(function(x){return x.id===id});
+  var r = reports.find(function(x){return String(x.id)===String(id)});
+  if(r && r.file && r.file.url) { window.open(r.file.url, '_blank'); return; }
   if(r && r.file && r.file.data) downloadFile(r.file.data, r.file.name);
   else downloadFile(null);
 }
 
 function openApprovalFile(id) {
-  var a = approvals.find(function(x){return x.id===id});
+  var a = approvals.find(function(x){return String(x.id)===String(id)});
+  if(a && a.file && a.file.url) { window.open(a.file.url, '_blank'); return; }
   if(a && a.file && a.file.data) downloadFile(a.file.data, a.file.name);
   else downloadFile(null);
 }
 
 function openResponseFile(id) {
-  var a = approvals.find(function(x){return x.id===id});
+  var a = approvals.find(function(x){return String(x.id)===String(id)});
+  if(a && a.responseFile && a.responseFile.url) { window.open(a.responseFile.url, '_blank'); return; }
   if(a && a.responseFile && a.responseFile.data) downloadFile(a.responseFile.data, a.responseFile.name);
   else downloadFile(null);
 }
@@ -2765,8 +3013,8 @@ function handleApprovalFile(input) {
     input.value = '';
     return;
   }
-  if(file.size > 2 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (2 ميجابايت)','#DC2626');
+  if(file.size > 10 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (10 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
@@ -2806,8 +3054,8 @@ function handleReportFile(input) {
     input.value = '';
     return;
   }
-  if(file.size > 2 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (2 ميجابايت)','#DC2626');
+  if(file.size > 10 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (10 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
@@ -2839,7 +3087,7 @@ function handleReportImages(input) {
   for(var i=0;i<files.length;i++) {
     (function(file){
       if(!file.type.startsWith('image/')) return;
-      if(file.size > 3*1024*1024) { showToast('⚠️ حجم الصورة '+file.name+' يتجاوز 3 ميجابايت','#DC2626'); return; }
+      if(file.size > 10*1024*1024) { showToast('⚠️ حجم الصورة '+file.name+' يتجاوز 10 ميجابايت','#DC2626'); return; }
       var reader = new FileReader();
       reader.onload = function(e) {
         reportImages.push({name:file.name, data:e.target.result, size:(file.size/1024).toFixed(0)+'KB'});
@@ -2856,7 +3104,7 @@ function renderReportImagePreviews() {
   if(!container) return;
   container.innerHTML = reportImages.map(function(img,idx) {
     return '<div style="position:relative;width:80px;height:80px;border-radius:8px;overflow:hidden;border:2px solid var(--slate-200)">' +
-      '<img src="'+img.data+'" style="width:100%;height:100%;object-fit:cover">' +
+      '<img src="'+(img.url||img.data)+'" style="width:100%;height:100%;object-fit:cover">' +
       '<button onclick="removeReportImage('+idx+')" style="position:absolute;top:2px;right:2px;background:rgba(220,38,38,0.9);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button></div>';
   }).join('');
 }
@@ -2935,24 +3183,42 @@ function renderWarnings() {
 
 function showAddWarningModal() {
   const deptOpts = DEPARTMENTS.map(d=>'<option value="'+d.id+'">'+d.icon+' '+d.name+'</option>').join('');
-  const allMemberOpts = members.filter(m=>m.role==='member').map(m=>'<option value="'+m.id+'" data-dept="'+(m.dept||0)+'" data-team="'+(m.teamId||0)+'">'+m.name+'</option>').join('');
   showModal('⚠️ إصدار إنذار جديد', `
     <div class="form-group"><label class="form-label">عنوان الإنذار</label><input class="form-input" id="newWarnTitle" placeholder="عنوان مختصر للإنذار..."></div>
     <div class="form-group"><label class="form-label">درجة الخطورة</label><select class="form-select" id="newWarnSeverity">
       <option value="notice">📌 ملاحظة</option><option value="warning">⚠️ تنبيه</option><option value="violation">🔴 إنذار رسمي</option>
     </select></div>
-    <div class="form-group"><label class="form-label">الإدارة</label><select class="form-select" id="newWarnDept" onchange="filterWarnTeams('new');filterWarnMembers()">
+    <div class="form-group"><label class="form-label">الإدارة</label><select class="form-select" id="newWarnDept" onchange="filterWarnTeams('new');filterWarnMembersSearch()">
       <option value="">كل الإدارات</option>${deptOpts}
     </select></div>
-    <div class="form-group"><label class="form-label">الفريق</label><select class="form-select" id="newWarnTeam" onchange="filterWarnMembers()">
+    <div class="form-group"><label class="form-label">الفريق</label><select class="form-select" id="newWarnTeam" onchange="filterWarnMembersSearch()">
       <option value="">كل الفرق</option>
     </select></div>
-    <div class="form-group"><label class="form-label">الموجه إليه</label><select class="form-select" id="newWarnTarget">
-      <option value="">اختر العضو...</option>${allMemberOpts}
-    </select></div>
+    <div class="form-group"><label class="form-label">الموجه إليه</label><div id="warnTargetContainer"></div></div>
     <div class="form-group"><label class="form-label">السبب والتفاصيل</label><textarea class="form-textarea" id="newWarnReason" placeholder="اكتب سبب الإنذار بالتفصيل..."></textarea></div>
     <button class="btn btn-primary btn-lg btn-block" onclick="addWarning()">إصدار الإنذار</button>
   `);
+  buildSearchSelect('warnTargetContainer', {
+    filterRole: null,
+    placeholder: '🔍 ابحث باسم العضو...',
+    hiddenInputId: 'newWarnTarget',
+    showCurrentFirst: false
+  });
+}
+
+function filterWarnMembersSearch() {
+  var deptId = parseInt(document.getElementById('newWarnDept')?.value) || 0;
+  var teamId = parseInt(document.getElementById('newWarnTeam')?.value) || 0;
+  var listEl = document.getElementById('warnTargetContainer_list');
+  if(!listEl) return;
+  listEl.querySelectorAll('.search-select-item').forEach(function(it){
+    var d = parseInt(it.getAttribute('data-dept'))||0;
+    var t = parseInt(it.getAttribute('data-team'))||0;
+    var show = true;
+    if(deptId && d && d !== deptId) show = false;
+    if(teamId && t && t !== teamId) show = false;
+    it.style.display = show ? '' : 'none';
+  });
 }
 
 function filterWarnTeams(prefix) {
@@ -3140,15 +3406,11 @@ function renderCompanies() {
 }
 
 function showAddCompanyModal() {
-  var memberOpts = members.map(function(m){
-    return '<option value="'+m.id+'" '+(m.id===currentUser.id?'selected':'')+'>'+m.name+'</option>';
-  }).join('');
-
   showModal('➕ إضافة شركة جديدة',
     '<div class="form-group"><label class="form-label">اسم الشركة</label><input class="form-input" id="newCompName" placeholder="مثال: شركة تمارا"></div>' +
     '<div class="form-group"><label class="form-label">نوع التعاون</label><select class="form-select" id="newCompType">' +
     '<option value="sponsorship">💰 رعاية</option><option value="partnership">🤝 شراكة</option><option value="speaker">🎤 متحدث</option><option value="booth">🏪 معرض</option></select></div>' +
-    '<div class="form-group"><label class="form-label">من تواصل معهم</label><select class="form-select" id="newCompBy">' + memberOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-label">من تواصل معهم</label><div id="compByContainer"></div></div>' +
     '<div class="form-group"><label class="form-label">طريقة التواصل</label><select class="form-select" id="newCompMethod">' +
     '<option value="إيميل">📧 إيميل</option><option value="واتساب">💬 واتساب</option><option value="اتصال">📞 اتصال</option><option value="حضوري">🤝 حضوري</option><option value="لينكدإن">💼 لينكدإن</option></select></div>' +
     '<div style="border:1px solid var(--slate-200);border-radius:12px;padding:14px;margin-bottom:16px;background:var(--slate-50)">' +
@@ -3163,6 +3425,14 @@ function showAddCompanyModal() {
     '<option value="pending">قيد الانتظار</option><option value="contacted">تم التواصل</option><option value="approved">موافقة</option><option value="rejected">اعتذار</option></select></div>' +
     '<div class="form-group"><label class="form-label">ملاحظات (اختياري)</label><textarea class="form-textarea" id="newCompNotes" placeholder="أي تفاصيل إضافية..."></textarea></div>' +
     '<button class="btn btn-primary btn-lg btn-block" onclick="addCompany()">إضافة الشركة</button>');
+  // Searchable dropdown — current user first and pre-selected
+  buildSearchSelect('compByContainer', {
+    filterRole: null,
+    placeholder: '🔍 ابحث باسم العضو...',
+    hiddenInputId: 'newCompBy',
+    showCurrentFirst: true,
+    defaultValue: currentUser.id
+  });
 }
 
 function addCompany() {
@@ -3873,6 +4143,8 @@ function saveSession() {
 
   // Save to Firebase (async)
   _suppressSync = true;
+  // Safety: auto-reset suppress after 5 seconds
+  setTimeout(function(){ _suppressSync = false; }, 5000);
   Promise.all([
     fbSaveCollection('members', members),
     fbSaveCollection('tasks', tasks),
@@ -3897,7 +4169,7 @@ function loadSession() {
     const saved = localStorage.getItem('fintech_session');
     if(saved) {
       const u = JSON.parse(saved);
-      const found = members.find(m => m.id === u.id);
+      const found = members.find(m => String(m.id) === String(u.id));
       if(found) return found;
     }
   } catch(e) {}
@@ -3946,8 +4218,8 @@ addMember = function() { _origAddMember(); saveSession(); };
 // ═══════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', function() {
   initStars();
-  // Clear stale localStorage cache to ensure fresh Firestore data
-  ['fintech_tasks','fintech_reports','fintech_approvals','fintech_announcements',
+  // Clear stale localStorage cache EXCEPT reports/approvals (they have file data)
+  ['fintech_tasks','fintech_announcements',
    'fintech_members','fintech_warnings','fintech_bugs','fintech_companies',
    'fintech_wbs_phases','fintech_phases','fintech_org_report'].forEach(function(k){
     localStorage.removeItem(k);
