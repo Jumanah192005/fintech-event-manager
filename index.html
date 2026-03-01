@@ -670,6 +670,7 @@ var _fbListenersActive = false;
 var _suppressSync = false;
 var _firebaseAvailable = false;
 var _fbScriptsLoaded = 0;
+var _authActionInProgress = false; // Prevent onAuthStateChanged interference
 
 // Load Firebase scripts dynamically
 function loadFirebaseScripts() {
@@ -709,20 +710,25 @@ function initFirebase() {
     // Hide demo login when Firebase is active
     var demoTab = document.getElementById('tabDemo');
     if(demoTab) demoTab.style.display='none';
-    // Now check auth state
+    // Now check auth state (auto-login on page reload)
     auth.onAuthStateChanged(function(firebaseUser) {
+      if(_authActionInProgress || currentUser) return; // Skip if login/register in progress
       if(firebaseUser) {
         fbLoadAll().then(function() {
+          if(currentUser) return; // Already logged in by handleLogin/handleRegister
           var found = members.find(function(m){return m.email===firebaseUser.email || m.uid===firebaseUser.uid});
           if(found) {
             found.uid = firebaseUser.uid;
             _fbReady = true;
             login(found);
+          } else {
+            // User in Auth but not in Firestore members — might be new, wait
+            console.log('Auth user not found in members, waiting for registration...');
           }
         }).catch(function(e) {
           console.warn('Firestore load failed, using cache:', e);
           var cached = loadSession();
-          if(cached) { _fbReady = true; login(cached); }
+          if(cached && !currentUser) { _fbReady = true; login(cached); }
         });
       }
     });
@@ -1088,27 +1094,30 @@ function handleLogin() {
 
   // ONLINE MODE: Firebase Auth
   errEl.style.display='block'; errEl.style.color='var(--blue)'; errEl.textContent='⏳ جاري تسجيل الدخول...';
+  _authActionInProgress = true;
 
   auth.signInWithEmailAndPassword(email, pass).then(function(cred) {
     // Auth success - find member profile
-    var found = members.find(function(m){return m.email===email});
-    if(found) {
-      found.uid = cred.user.uid;
-      login(found);
-    } else {
-      // Create member from Firestore user doc
-      db.collection('members').where('email','==',email).get().then(function(snap){
-        if(!snap.empty) {
-          var m = snap.docs[0].data();
-          m.uid = cred.user.uid;
-          login(m);
-        } else {
-          errEl.style.color='#DC2626';
-          errEl.style.display='block'; errEl.textContent='الحساب غير مسجل في النظام';
-        }
-      });
-    }
+    return fbLoadAll().then(function(){
+      var found = members.find(function(m){return m.email===email || m.uid===cred.user.uid});
+      if(found) {
+        found.uid = cred.user.uid;
+        db.collection('members').doc(String(found.id)).set(found);
+        login(found);
+      } else {
+        // User in Auth but not in members — auto-create
+        var autoMember = {
+          id: Date.now(), name: cred.user.displayName || email.split('@')[0],
+          email: email, role: 'member', uid: cred.user.uid,
+          teamId: null, dept: null, title: 'عضو'
+        };
+        members.push(autoMember);
+        db.collection('members').doc(String(autoMember.id)).set(autoMember);
+        login(autoMember);
+      }
+    });
   }).catch(function(err) {
+    _authActionInProgress = false;
     errEl.style.color='#DC2626';
     errEl.style.display='block';
     var msg = 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
@@ -1157,6 +1166,7 @@ function handleRegister() {
 
   // ONLINE MODE: Firebase Auth
   sucEl.style.display='block'; sucEl.textContent='⏳ جاري إنشاء الحساب...';
+  _authActionInProgress = true;
 
   // Check if email exists in members (pre-registered by admin)
   var existing = members.find(function(m){return m.email===email});
@@ -1185,11 +1195,30 @@ function handleRegister() {
     sucEl.textContent = '✅ تم إنشاء حسابك بنجاح! جاري تسجيل الدخول...';
     setTimeout(function(){ login(newMember); }, 1000);
   }).catch(function(err) {
+    _authActionInProgress = false;
     sucEl.style.display='none';
     errEl.style.display='block';
     var msg = 'حدث خطأ أثناء التسجيل';
     console.error('Register error:', err.code, err.message);
-    if(err.code==='auth/email-already-in-use') msg='البريد الإلكتروني مسجل مسبقاً — سجّل دخول بدلاً من ذلك';
+    if(err.code==='auth/email-already-in-use') {
+      // Email exists in Auth — try signing in and create/update member
+      auth.signInWithEmailAndPassword(email, pass).then(function(cred){
+        var newMember = {
+          id: Date.now(), name:name, email:email, role:role, uid:cred.user.uid,
+          teamId: (role==='supervisor'||role==='admin') ? null : teamId,
+          dept: (role==='supervisor'||role==='admin') ? null : deptId,
+          title: role==='admin' ? 'مدير' : role==='supervisor' ? 'مشرف الفعالية' : 'عضو'
+        };
+        members.push(newMember);
+        db.collection('members').doc(String(newMember.id)).set(newMember);
+        sucEl.style.display='block'; sucEl.textContent='✅ تم ربط حسابك! جاري الدخول...';
+        setTimeout(function(){ login(newMember); }, 1000);
+      }).catch(function(e2){
+        _authActionInProgress = false;
+        errEl.style.display='block'; errEl.textContent='البريد مسجل بكلمة مرور مختلفة — سجّل دخول من تاب تسجيل الدخول';
+      });
+      return;
+    }
     if(err.code==='auth/weak-password') msg='كلمة المرور ضعيفة — استخدم 6 أحرف على الأقل';
     if(err.code==='auth/network-request-failed') msg='لا يوجد اتصال بالإنترنت';
     if(err.code==='auth/invalid-api-key') msg='مفتاح API غير صحيح';
@@ -1209,6 +1238,7 @@ function demoLogin(role) {
 }
 
 function login(user) {
+  _authActionInProgress = false;
   currentUser = user;
   if(currentUser) localStorage.setItem('fintech_session', JSON.stringify(currentUser));
   $('loginScreen').style.display = 'none';
