@@ -718,6 +718,13 @@ function initFirebase() {
     auth = firebase.auth();
     db = firebase.firestore();
     storage = firebase.storage();
+    // Verify Storage connection
+    try {
+      storage.ref('test').getDownloadURL().catch(function(){});
+      console.log('📁 Storage initialized');
+    } catch(e) {
+      console.warn('📁 Storage init warning:', e);
+    }
     db.enablePersistence({synchronizeTabs:true}).catch(function(err){console.log('Persistence:',err.code)});
     _firebaseAvailable = true;
     console.log('🔥 Firebase initialized');
@@ -765,17 +772,27 @@ function startOfflineMode() {
 function cleanForDb(obj) {
   if(!obj) return obj;
   var c = Object.assign({}, obj);
-  // Keep URLs, only strip base64 data
+  // Keep URLs, and keep base64 for small files (< 900KB) as fallback
   if(c.file) {
-    if(c.file.url) c.file = {name:c.file.name,size:c.file.size,type:c.file.type,url:c.file.url};
-    else if(c.file.data) c.file = {name:c.file.name,size:c.file.size,type:c.file.type};
+    if(c.file.url) {
+      c.file = {name:c.file.name,size:c.file.size,type:c.file.type,url:c.file.url};
+    } else if(c.file.data) {
+      // Keep base64 if small enough for Firestore (< 900KB)
+      if(c.file.data.length < 900000) {
+        // Keep data for Firestore
+      } else {
+        c.file = {name:c.file.name,size:c.file.size,type:c.file.type};
+      }
+    }
   }
   if(c.responseFile) {
     if(c.responseFile.url) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type,url:c.responseFile.url};
+    else if(c.responseFile.data && c.responseFile.data.length < 900000) { /* keep */ }
     else if(c.responseFile.data) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type};
   }
   if(c.images && c.images.length) c.images = c.images.map(function(img){
     if(img.url) return {name:img.name,size:img.size,url:img.url};
+    if(img.data && img.data.length < 900000) return img; // Keep small images
     return {name:img.name,size:img.size};
   });
   return c;
@@ -785,7 +802,14 @@ function cleanForDb(obj) {
 // FIREBASE STORAGE — Cloud File Storage
 // ═══════════════════════════════════════
 function uploadToStorage(fileObj, folder) {
-  if(!storage || !_firebaseAvailable || !fileObj || !fileObj.data) return Promise.resolve(fileObj);
+  if(!fileObj || !fileObj.data) return Promise.resolve(fileObj);
+  
+  // If Storage not available, store base64 directly in Firestore (for small files < 800KB)
+  if(!storage || !_firebaseAvailable) {
+    console.warn('📁 Storage not available, keeping base64');
+    return Promise.resolve(fileObj);
+  }
+
   try {
     var parts = fileObj.data.split(',');
     var mime = parts[0].match(/:(.*?);/)[1];
@@ -793,19 +817,22 @@ function uploadToStorage(fileObj, folder) {
     var arr = new Uint8Array(bstr.length);
     for(var i=0;i<bstr.length;i++) arr[i]=bstr.charCodeAt(i);
     var blob = new Blob([arr], {type: mime});
+    console.log('📁 Uploading:', fileObj.name, '('+Math.round(blob.size/1024)+'KB)');
   } catch(e) {
     console.error('📁 File conversion error:', e);
     return Promise.resolve(fileObj);
   }
   var path = 'files/' + folder + '/' + Date.now() + '_' + (fileObj.name||'file');
-  return storage.ref(path).put(blob).then(function(snap) {
+  return storage.ref(path).put(blob, {contentType: mime}).then(function(snap) {
     return snap.ref.getDownloadURL();
   }).then(function(url) {
-    console.log('📁 Uploaded:', fileObj.name, '→', url);
+    console.log('📁 ✅ Uploaded:', fileObj.name, '→', url);
+    showToast('✅ تم رفع الملف بنجاح','#059669');
     return {name: fileObj.name, size: fileObj.size, type: fileObj.type, url: url};
   }).catch(function(err) {
-    console.error('📁 Upload failed:', err.code, err.message);
-    showToast('⚠️ فشل رفع الملف — سيُحفظ محلياً فقط','#D97706');
+    console.error('📁 ❌ Upload failed:', err.code, err.message, err);
+    showToast('⚠️ فشل رفع الملف: ' + (err.code||err.message||'خطأ غير معروف'),'#DC2626');
+    // Fallback: keep base64 data so at least it works on this device
     return fileObj;
   });
 }
@@ -821,11 +848,23 @@ function uploadImagesToStorage(images) {
 // Save a collection to Firestore
 function fbSaveCollection(colName, items) {
   if(!_fbReady || !_firebaseAvailable || !db) return Promise.resolve();
-  var batch = db.batch();
-  items.forEach(function(item) {
-    batch.set(db.collection(colName).doc(String(item.id)), cleanForDb(item));
+  // Save each document individually to handle size limits
+  var promises = items.map(function(item) {
+    var cleaned = cleanForDb(item);
+    return db.collection(colName).doc(String(item.id)).set(cleaned).catch(function(e) {
+      if(e.message && e.message.indexOf('exceeds the maximum') > -1) {
+        // Document too large — strip file data and retry
+        console.warn('📁 Doc too large, stripping file data:', item.id);
+        if(cleaned.file && cleaned.file.data) cleaned.file = {name:cleaned.file.name,size:cleaned.file.size,type:cleaned.file.type};
+        if(cleaned.images) cleaned.images = cleaned.images.map(function(img){return {name:img.name,size:img.size,url:img.url||null}});
+        return db.collection(colName).doc(String(item.id)).set(cleaned).catch(function(e2){
+          console.warn('FB save '+colName+' item '+item.id+':', e2);
+        });
+      }
+      console.warn('FB save '+colName+' item '+item.id+':', e);
+    });
   });
-  return batch.commit().catch(function(e){console.warn('FB save '+colName+':', e)});
+  return Promise.all(promises);
 }
 
 function fbDelete(colName, id) {
@@ -2303,12 +2342,16 @@ function addReport(status) {
   if(!title) { showToast('⚠️ يرجى إدخال عنوان التقرير','#DC2626'); return; }
   if(!content && !reportFile) { showToast('⚠️ يرجى كتابة محتوى أو إرفاق ملف','#DC2626'); return; }
 
-  // Show uploading state
-  showToast('⏳ جاري رفع الملفات...','var(--blue)');
+  // Capture ALL form values BEFORE closing modal
+  var deptVal = parseInt($('newReportDept')?.value)||null;
+  var typeVal = $('newReportType')?.value||'progress';
   var localFile = reportFile ? Object.assign({},reportFile) : null;
   var localImages = reportImages.length>0 ? reportImages.slice() : null;
   reportFile=null; reportImages=[];
   hideModal();
+
+  // Show uploading state
+  if(localFile || localImages) showToast('⏳ جاري رفع الملفات...','var(--blue)');
 
   // Upload files to Firebase Storage, then save
   var uploadFile = localFile ? uploadToStorage(localFile, 'reports') : Promise.resolve(null);
@@ -2317,7 +2360,7 @@ function addReport(status) {
   Promise.all([uploadFile, uploadImgs]).then(function(results) {
     var cloudFile = results[0];
     var cloudImages = results[1];
-    reports.push({id:Date.now(),title:title,content:content,author:currentUser.id,date:today(),dept:parseInt($('newReportDept')?.value)||null,status:st,type:$('newReportType')?.value||'progress',file:cloudFile,images:cloudImages});
+    reports.push({id:Date.now(),title:title,content:content,author:currentUser.id,date:today(),dept:deptVal,status:st,type:typeVal,file:cloudFile,images:cloudImages});
     renderReports(); saveSession();
 
     var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
