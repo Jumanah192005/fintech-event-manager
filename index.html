@@ -2350,36 +2350,48 @@ function addReport(status) {
   reportFile=null; reportImages=[];
   hideModal();
 
-  // Show uploading state
-  if(localFile || localImages) showToast('⏳ جاري رفع الملفات...','var(--blue)');
+  // SAVE IMMEDIATELY — don't wait for upload
+  var newId = Date.now();
+  var fileMeta = localFile ? {name:localFile.name,size:localFile.size,type:localFile.type} : null;
+  var imgsMeta = localImages ? localImages.map(function(img){return {name:img.name,size:img.size}}) : null;
+  reports.push({id:newId,title:title,content:content,author:currentUser.id,date:today(),dept:deptVal,status:st,type:typeVal,file:fileMeta,images:imgsMeta});
+  renderReports(); saveSession();
 
-  // Upload files to Firebase Storage, then save
-  var uploadFile = localFile ? uploadToStorage(localFile, 'reports') : Promise.resolve(null);
-  var uploadImgs = localImages ? uploadImagesToStorage(localImages) : Promise.resolve(null);
+  var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
+  var toastColor = st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)';
+  showToast(toastMsg, toastColor);
 
-  Promise.all([uploadFile, uploadImgs]).then(function(results) {
-    var cloudFile = results[0];
-    var cloudImages = results[1];
-    reports.push({id:Date.now(),title:title,content:content,author:currentUser.id,date:today(),dept:deptVal,status:st,type:typeVal,file:cloudFile,images:cloudImages});
-    renderReports(); saveSession();
+  // Email notifications
+  if(st==='pending_approval') {
+    var rptBody = emailBody('📝','تقرير جديد بانتظار الموافقة',
+      [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#D97706');
+    notifyAdmin('تقرير جديد بانتظار الموافقة: '+title, rptBody);
+    notifySupervisors('تقرير جديد بانتظار الموافقة: '+title, rptBody);
+  }
+  if(st==='published') {
+    var pubBody = emailBody('📝','تم نشر تقرير جديد',
+      [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#059669');
+    notifySupervisors('تقرير جديد منشور: '+title, pubBody);
+  }
 
-    var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
-    var toastColor = st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)';
-    showToast(toastMsg, toastColor);
-
-    // Email notifications
-    if(st==='pending_approval') {
-      var rptBody = emailBody('📝','تقرير جديد بانتظار الموافقة',
-        [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#D97706');
-      notifyAdmin('تقرير جديد بانتظار الموافقة: '+title, rptBody);
-      notifySupervisors('تقرير جديد بانتظار الموافقة: '+title, rptBody);
-    }
-    if(st==='published') {
-      var pubBody = emailBody('📝','تم نشر تقرير جديد',
-        [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#059669');
-      notifySupervisors('تقرير جديد منشور: '+title, pubBody);
-    }
-  }).catch(function(e){ console.error('Report save error:', e); showToast('⚠️ حدث خطأ','#DC2626'); });
+  // Upload files in BACKGROUND — update report when done
+  if(localFile && localFile.data) {
+    uploadToStorage(localFile, 'reports').then(function(cloudFile) {
+      if(cloudFile && cloudFile.url) {
+        var rpt = reports.find(function(r){return r.id===newId});
+        if(rpt) { rpt.file = cloudFile; saveSession(); renderReports(); }
+        showToast('📎 تم رفع المرفق بنجاح','#059669');
+      }
+    }).catch(function(e){ console.warn('Report file upload failed:', e); });
+  }
+  if(localImages && localImages.length) {
+    uploadImagesToStorage(localImages).then(function(cloudImages) {
+      if(cloudImages) {
+        var rpt = reports.find(function(r){return r.id===newId});
+        if(rpt) { rpt.images = cloudImages; saveSession(); renderReports(); }
+      }
+    }).catch(function(e){ console.warn('Report images upload failed:', e); });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2551,25 +2563,30 @@ function addApproval() {
   var localType = $('newApprovalType').value;
   selectedUrgency='normal'; approvalFile=null;
   hideModal();
-  showToast('⏳ جاري رفع الطلب...','var(--blue)');
 
-  var uploadFile = localFile ? uploadToStorage(localFile, 'approvals') : Promise.resolve(null);
-  uploadFile.then(function(cloudFile) {
-    approvals.push({id:Date.now(),title:title,notes:localNotes,type:localType,urgency:localUrgency,requester:currentUser.id,date:today(),status:'pending',approvedBy:null,approvedAt:null,file:cloudFile});
-    updatePendingBadge(); renderApprovals(); saveSession();
-    showToast('✅ تم رفع طلب الموافقة','#059669');
+  // SAVE IMMEDIATELY — don't wait for upload
+  var newId = Date.now();
+  approvals.push({id:newId,title:title,notes:localNotes,type:localType,urgency:localUrgency,requester:currentUser.id,date:today(),status:'pending',approvedBy:null,approvedAt:null,file:localFile?{name:localFile.name,size:localFile.size,type:localFile.type}:null});
+  updatePendingBadge(); renderApprovals(); saveSession();
+  showToast('✅ تم رفع طلب الموافقة','#059669');
 
-    // Email notification to supervisors
-    var appr = approvals[approvals.length-1];
-    var urgColor = appr.urgency==='urgent'?'#DC2626':'#D97706';
-    var urgLabel = appr.urgency==='urgent'?'🔴 عاجل':'⏳ عادي';
-    notifySupervisors('طلب موافقة جديد: '+title, emailBody(
-      appr.urgency==='urgent'?'🔴':'📋',
-      'طلب موافقة جديد',
-      [{label:'العنوان',value:title},{label:'مقدم الطلب',value:currentUser.name},{label:'الأولوية',value:urgLabel},{label:'التاريخ',value:today()}],
-      urgColor
-    ));
-  }).catch(function(e){ console.error('Approval save error:', e); });
+  // Email notification to supervisors
+  var urgColor = localUrgency==='urgent'?'#DC2626':'#D97706';
+  var urgLabel = localUrgency==='urgent'?'🔴 عاجل':'⏳ عادي';
+  notifySupervisors('طلب موافقة جديد: '+title, emailBody(
+    localUrgency==='urgent'?'🔴':'📋', 'طلب موافقة جديد',
+    [{label:'العنوان',value:title},{label:'مقدم الطلب',value:currentUser.name},{label:'الأولوية',value:urgLabel},{label:'التاريخ',value:today()}], urgColor));
+
+  // Upload file in BACKGROUND — update approval when done
+  if(localFile && localFile.data) {
+    uploadToStorage(localFile, 'approvals').then(function(cloudFile) {
+      if(cloudFile && cloudFile.url) {
+        var appr = approvals.find(function(a){return a.id===newId});
+        if(appr) { appr.file = cloudFile; saveSession(); }
+        showToast('📎 تم رفع المرفق بنجاح','#059669');
+      }
+    }).catch(function(e){ console.warn('File upload failed:', e); });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
