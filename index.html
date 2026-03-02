@@ -791,10 +791,13 @@ function cleanForDb(obj) {
 // FILE STORAGE — Direct Firestore (no Firebase Storage needed)
 // ═══════════════════════════════════════
 function uploadToStorage(fileObj, folder) {
-  if(!_firebaseAvailable || !db || !fileObj || !fileObj.data) return Promise.resolve(fileObj);
+  if(!_firebaseAvailable || !db || !fileObj || !fileObj.data) {
+    console.warn('📁 Cannot save: fb='+_firebaseAvailable+' db='+!!db+' file='+!!fileObj);
+    return Promise.resolve(fileObj);
+  }
   var fileId = folder + '_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
   var data = fileObj.data;
-  var chunkSize = 700000; // ~700KB per chunk (safe under 1MB Firestore limit)
+  var chunkSize = 700000;
   var totalChunks = Math.ceil(data.length / chunkSize);
   console.log('📁 Saving', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+Math.round(data.length/1024)+'KB)');
 
@@ -808,11 +811,12 @@ function uploadToStorage(fileObj, folder) {
   }
 
   return Promise.all(promises).then(function() {
-    console.log('📁 ✅ Saved:', fileObj.name, '(fileId:'+fileId+')');
+    console.log('📁 ✅ Saved:', fileObj.name, 'fileId='+fileId);
+    showToast('📁 ✅ تم حفظ الملف: '+fileObj.name,'#059669');
     return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId};
   }).catch(function(err) {
     console.error('📁 ❌ Save failed:', err);
-    // Return with data so at least it works locally
+    showToast('📁 ❌ فشل حفظ الملف: '+err.message,'#DC2626');
     return fileObj;
   });
 }
@@ -2330,7 +2334,6 @@ function addReport(status) {
   if(!title) { showToast('⚠️ يرجى إدخال عنوان التقرير','#DC2626'); return; }
   if(!content && !reportFile) { showToast('⚠️ يرجى كتابة محتوى أو إرفاق ملف','#DC2626'); return; }
 
-  // Capture form values BEFORE hideModal
   var deptVal = parseInt($('newReportDept')?.value)||null;
   var typeVal = $('newReportType')?.value||'progress';
   var localFile = reportFile ? Object.assign({},reportFile) : null;
@@ -2338,46 +2341,48 @@ function addReport(status) {
   reportFile=null; reportImages=[];
   hideModal();
 
-  // SAVE IMMEDIATELY with file metadata only
-  var newId = Date.now();
-  reports.push({id:newId, title:title, content:content, author:currentUser.id, date:today(),
-    dept:deptVal, status:st, type:typeVal,
-    file:localFile ? {name:localFile.name, size:localFile.size, type:localFile.type} : null,
-    images:localImages ? localImages.map(function(img){return {name:img.name, size:img.size}}) : null
-  });
-  renderReports(); saveSession();
-
-  var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
-  showToast(toastMsg, st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)');
-
-  // Email notifications (send immediately)
-  if(st==='pending_approval') {
-    var rptBody = emailBody('📝','تقرير جديد بانتظار الموافقة',
-      [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#D97706');
-    notifyAdmin('تقرير جديد بانتظار الموافقة: '+title, rptBody);
-    notifySupervisors('تقرير جديد بانتظار الموافقة: '+title, rptBody);
-  }
-  if(st==='published') {
-    var pubBody = emailBody('📝','تم نشر تقرير جديد',
-      [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#059669');
-    notifySupervisors('تقرير جديد منشور: '+title, pubBody);
+  function doSave(fileResult, imagesResult) {
+    reports.push({id:Date.now(), title:title, content:content, author:currentUser.id, date:today(),
+      dept:deptVal, status:st, type:typeVal, file:fileResult, images:imagesResult});
+    renderReports(); saveSession();
+    var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
+    showToast(toastMsg, st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)');
+    if(st==='pending_approval') {
+      var rptBody = emailBody('📝','تقرير جديد بانتظار الموافقة',
+        [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#D97706');
+      notifyAdmin('تقرير جديد بانتظار الموافقة: '+title, rptBody);
+      notifySupervisors('تقرير جديد بانتظار الموافقة: '+title, rptBody);
+    }
+    if(st==='published') {
+      var pubBody = emailBody('📝','تم نشر تقرير جديد',
+        [{label:'العنوان',value:title},{label:'الكاتب',value:currentUser.name},{label:'التاريخ',value:today()}], '#059669');
+      notifySupervisors('تقرير جديد منشور: '+title, pubBody);
+    }
   }
 
-  // Upload files in BACKGROUND — update report when done
+  // Same pattern as working addApproval: upload file first, then save
   if(localFile && localFile.data) {
+    showToast('⏳ جاري حفظ الملف...','var(--blue)');
     uploadToStorage(localFile, 'reports').then(function(result) {
-      if(result && (result.fileId || result.url)) {
-        var rpt = reports.find(function(r){return r.id===newId});
-        if(rpt) { rpt.file = result; saveSession(); renderReports(); }
-        showToast('📎 تم رفع المرفق','#059669');
+      // Now upload images if any
+      if(localImages && localImages.length) {
+        uploadImagesToStorage(localImages).then(function(imgResults) {
+          doSave(result, imgResults);
+        }).catch(function(e) { doSave(result, null); });
+      } else {
+        doSave(result, null);
       }
-    }).catch(function(e){ console.warn('File upload bg:', e); });
-  }
-  if(localImages && localImages.length) {
-    uploadImagesToStorage(localImages).then(function(results) {
-      var rpt = reports.find(function(r){return r.id===newId});
-      if(rpt && results) { rpt.images = results; saveSession(); renderReports(); }
-    }).catch(function(e){ console.warn('Images upload bg:', e); });
+    }).catch(function(e) {
+      console.error('Report file save error:', e);
+      doSave({name:localFile.name, size:localFile.size, type:localFile.type}, null);
+    });
+  } else if(localImages && localImages.length) {
+    showToast('⏳ جاري حفظ الصور...','var(--blue)');
+    uploadImagesToStorage(localImages).then(function(imgResults) {
+      doSave(null, imgResults);
+    }).catch(function(e) { doSave(null, null); });
+  } else {
+    doSave(null, null);
   }
 }
 
@@ -2483,35 +2488,30 @@ function handleApproval(id, action) {
   responseFileData = null;
   hideModal();
 
-  // SAVE IMMEDIATELY
-  approvals = approvals.map(function(a) {
-    if(a.id===id) return Object.assign({}, a, {status:action, approvedBy:currentUser.id, approvedAt:today(), comment:comment,
-      responseFile:localResponseFile ? {name:localResponseFile.name, size:localResponseFile.size, type:localResponseFile.type} : null});
-    return a;
-  });
-  updatePendingBadge(); renderApprovals(); saveSession();
-  showToast(action==='approved' ? '✅ تمت الموافقة' : '❌ تم الرفض', action==='approved' ? '#059669' : '#DC2626');
-
-  // Email notification to requester
-  var appr = approvals.find(function(a){return a.id===id});
-  if(appr) {
-    var isApproved = action==='approved';
-    notifyMember(appr.requester, (isApproved?'تمت الموافقة':'تم رفض الطلب')+': '+appr.title, emailBody(
-      isApproved?'✅':'❌',
-      isApproved?'تمت الموافقة على طلبك':'تم رفض طلبك',
-      [{label:'العنوان',value:appr.title},{label:'القرار',value:isApproved?'✅ موافق عليه':'❌ مرفوض'},{label:'بواسطة',value:currentUser.name}].concat(comment?[{label:'تعليق',value:comment}]:[]),
-      isApproved?'#059669':'#DC2626'
-    ));
+  function doSave(fileResult) {
+    approvals = approvals.map(function(a) {
+      if(a.id===id) return Object.assign({}, a, {status:action, approvedBy:currentUser.id, approvedAt:today(), comment:comment, responseFile:fileResult});
+      return a;
+    });
+    updatePendingBadge(); renderApprovals(); saveSession();
+    showToast(action==='approved' ? '✅ تمت الموافقة' : '❌ تم الرفض', action==='approved' ? '#059669' : '#DC2626');
+    var appr = approvals.find(function(a){return a.id===id});
+    if(appr) {
+      var isApproved = action==='approved';
+      notifyMember(appr.requester, (isApproved?'تمت الموافقة':'تم رفض الطلب')+': '+appr.title, emailBody(
+        isApproved?'✅':'❌', isApproved?'تمت الموافقة على طلبك':'تم رفض طلبك',
+        [{label:'العنوان',value:appr.title},{label:'القرار',value:isApproved?'✅ موافق عليه':'❌ مرفوض'},{label:'بواسطة',value:currentUser.name}].concat(comment?[{label:'تعليق',value:comment}]:[]),
+        isApproved?'#059669':'#DC2626'));
+    }
   }
 
-  // Upload response file in BACKGROUND
   if(localResponseFile && localResponseFile.data) {
+    showToast('⏳ جاري حفظ الملف...','var(--blue)');
     uploadToStorage(localResponseFile, 'responses').then(function(result) {
-      if(result && (result.fileId || result.url)) {
-        var ap = approvals.find(function(a){return a.id===id});
-        if(ap) { ap.responseFile = result; saveSession(); }
-      }
-    }).catch(function(e){ console.warn('Response file bg:', e); });
+      doSave(result);
+    }).catch(function(e) { doSave(null); });
+  } else {
+    doSave(null);
   }
 }
 
@@ -2560,32 +2560,31 @@ function addApproval() {
   selectedUrgency='normal'; approvalFile=null;
   hideModal();
 
-  // SAVE IMMEDIATELY
-  var newId = Date.now();
-  approvals.push({id:newId, title:title, notes:localNotes, type:localType, urgency:localUrgency,
-    requester:currentUser.id, date:today(), status:'pending', approvedBy:null, approvedAt:null,
-    file:localFile ? {name:localFile.name, size:localFile.size, type:localFile.type} : null
-  });
-  updatePendingBadge(); renderApprovals(); saveSession();
-  showToast('✅ تم رفع طلب الموافقة','#059669');
+  function doSave(fileResult) {
+    approvals.push({id:Date.now(), title:title, notes:localNotes, type:localType, urgency:localUrgency,
+      requester:currentUser.id, date:today(), status:'pending', approvedBy:null, approvedAt:null,
+      file:fileResult
+    });
+    updatePendingBadge(); renderApprovals(); saveSession();
+    showToast('✅ تم رفع طلب الموافقة','#059669');
+    var urgColor = localUrgency==='urgent'?'#DC2626':'#D97706';
+    var urgLabel = localUrgency==='urgent'?'🔴 عاجل':'⏳ عادي';
+    notifySupervisors('طلب موافقة جديد: '+title, emailBody(
+      localUrgency==='urgent'?'🔴':'📋', 'طلب موافقة جديد',
+      [{label:'العنوان',value:title},{label:'مقدم الطلب',value:currentUser.name},{label:'الأولوية',value:urgLabel},{label:'التاريخ',value:today()}],
+      urgColor));
+  }
 
-  // Email notification
-  var urgColor = localUrgency==='urgent'?'#DC2626':'#D97706';
-  var urgLabel = localUrgency==='urgent'?'🔴 عاجل':'⏳ عادي';
-  notifySupervisors('طلب موافقة جديد: '+title, emailBody(
-    localUrgency==='urgent'?'🔴':'📋', 'طلب موافقة جديد',
-    [{label:'العنوان',value:title},{label:'مقدم الطلب',value:currentUser.name},{label:'الأولوية',value:urgLabel},{label:'التاريخ',value:today()}],
-    urgColor));
-
-  // Upload file in BACKGROUND
   if(localFile && localFile.data) {
+    showToast('⏳ جاري حفظ الملف...','var(--blue)');
     uploadToStorage(localFile, 'approvals').then(function(result) {
-      if(result && (result.fileId || result.url)) {
-        var appr = approvals.find(function(a){return a.id===newId});
-        if(appr) { appr.file = result; saveSession(); renderApprovals(); }
-        showToast('📎 تم رفع المرفق','#059669');
-      }
-    }).catch(function(e){ console.warn('Approval file bg:', e); });
+      doSave(result);
+    }).catch(function(e) {
+      console.error('File save error:', e);
+      doSave({name:localFile.name, size:localFile.size, type:localFile.type});
+    });
+  } else {
+    doSave(null);
   }
 }
 
