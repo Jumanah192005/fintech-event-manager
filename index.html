@@ -676,7 +676,6 @@ var firebaseConfig = {
 };
 var auth = null;
 var db = null;
-var storage = null;
 var _fbReady = false;
 var _fbListenersActive = false;
 var _suppressSync = false;
@@ -689,8 +688,7 @@ function loadFirebaseScripts() {
   var scripts = [
     'https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js',
     'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js',
-    'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js',
-    'https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js'
+    'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js'
   ];
   var loaded = 0;
   scripts.forEach(function(src, idx) {
@@ -717,7 +715,6 @@ function initFirebase() {
     firebase.initializeApp(firebaseConfig);
     auth = firebase.auth();
     db = firebase.firestore();
-    storage = firebase.storage();
     db.enablePersistence({synchronizeTabs:true}).catch(function(err){console.log('Persistence:',err.code)});
     _firebaseAvailable = true;
     console.log('🔥 Firebase initialized');
@@ -765,18 +762,24 @@ function startOfflineMode() {
 function cleanForDb(obj) {
   if(!obj) return obj;
   var c = Object.assign({}, obj);
-  // Keep URLs, only strip base64 data
+  // Strip base64 data, keep fileId for cloud files
   if(c.file) {
-    if(c.file.url) c.file = {name:c.file.name,size:c.file.size,type:c.file.type,url:c.file.url};
-    else if(c.file.data) c.file = {name:c.file.name,size:c.file.size,type:c.file.type};
+    var f = {name:c.file.name, size:c.file.size, type:c.file.type};
+    if(c.file.fileId) f.fileId = c.file.fileId;
+    if(c.file.url) f.url = c.file.url;
+    c.file = f;
   }
   if(c.responseFile) {
-    if(c.responseFile.url) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type,url:c.responseFile.url};
-    else if(c.responseFile.data) c.responseFile = {name:c.responseFile.name,size:c.responseFile.size,type:c.responseFile.type};
+    var rf = {name:c.responseFile.name, size:c.responseFile.size, type:c.responseFile.type};
+    if(c.responseFile.fileId) rf.fileId = c.responseFile.fileId;
+    if(c.responseFile.url) rf.url = c.responseFile.url;
+    c.responseFile = rf;
   }
   if(c.images && c.images.length) c.images = c.images.map(function(img){
-    if(img.url) return {name:img.name,size:img.size,url:img.url};
-    return {name:img.name,size:img.size};
+    var im = {name:img.name, size:img.size};
+    if(img.fileId) im.fileId = img.fileId;
+    if(img.url) im.url = img.url;
+    return im;
   });
   return c;
 }
@@ -784,54 +787,63 @@ function cleanForDb(obj) {
 // ═══════════════════════════════════════
 // FIREBASE STORAGE — Cloud File Storage
 // ═══════════════════════════════════════
+// ═══════════════════════════════════════
+// FILE STORAGE — Direct Firestore (no Firebase Storage needed)
+// ═══════════════════════════════════════
 function uploadToStorage(fileObj, folder) {
-  if(!storage || !_firebaseAvailable || !fileObj || !fileObj.data) return Promise.resolve(fileObj);
-  try {
-    var parts = fileObj.data.split(',');
-    var mime = parts[0].match(/:(.*?);/)[1];
-    var bstr = atob(parts[1]);
-    var arr = new Uint8Array(bstr.length);
-    for(var i=0;i<bstr.length;i++) arr[i]=bstr.charCodeAt(i);
-    var blob = new Blob([arr], {type: mime});
-    console.log('📁 Uploading:', fileObj.name, '('+Math.round(blob.size/1024)+'KB) to', folder);
-  } catch(e) {
-    console.error('📁 File conversion error:', e);
-    return Promise.resolve(fileObj);
+  if(!_firebaseAvailable || !db || !fileObj || !fileObj.data) return Promise.resolve(fileObj);
+  var fileId = folder + '_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
+  var data = fileObj.data;
+  var chunkSize = 700000; // ~700KB per chunk (safe under 1MB Firestore limit)
+  var totalChunks = Math.ceil(data.length / chunkSize);
+  console.log('📁 Saving', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+Math.round(data.length/1024)+'KB)');
+
+  var promises = [];
+  for(var i=0; i<totalChunks; i++) {
+    var chunk = data.substring(i * chunkSize, (i+1) * chunkSize);
+    promises.push(db.collection('files').doc(fileId + '_c' + i).set({
+      fid: fileId, ci: i, tc: totalChunks, d: chunk,
+      n: fileObj.name, s: fileObj.size, t: fileObj.type
+    }));
   }
-  var path = 'files/' + folder + '/' + Date.now() + '_' + (fileObj.name||'file');
-  
-  // Race between upload and 15-second timeout
-  var uploadPromise = storage.ref(path).put(blob).then(function(snap) {
-    return snap.ref.getDownloadURL();
-  }).then(function(url) {
-    console.log('📁 ✅ Uploaded:', fileObj.name, '→', url);
-    return {name: fileObj.name, size: fileObj.size, type: fileObj.type, url: url};
-  });
-  
-  var timeoutPromise = new Promise(function(resolve) {
-    setTimeout(function() {
-      console.warn('📁 ⏰ Upload timeout for:', fileObj.name);
-      resolve(null); // null = timed out
-    }, 15000);
-  });
-  
-  return Promise.race([uploadPromise, timeoutPromise]).then(function(result) {
-    if(result && result.url) return result;
-    // Timed out or failed — return original with data
-    return fileObj;
+
+  return Promise.all(promises).then(function() {
+    console.log('📁 ✅ Saved:', fileObj.name, '(fileId:'+fileId+')');
+    return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId};
   }).catch(function(err) {
-    console.error('📁 ❌ Upload failed:', err.code, err.message);
+    console.error('📁 ❌ Save failed:', err);
+    // Return with data so at least it works locally
     return fileObj;
   });
 }
 
 function uploadImagesToStorage(images) {
-  if(!storage || !_firebaseAvailable || !images || !images.length) return Promise.resolve(images||[]);
+  if(!_firebaseAvailable || !db || !images || !images.length) return Promise.resolve(images||[]);
   return Promise.all(images.map(function(img) {
-    if(img.url) return Promise.resolve(img);
-    return uploadToStorage(img, 'images');
+    if(img.fileId) return Promise.resolve(img);
+    return uploadToStorage(img, 'img');
   }));
 }
+
+// Load file from Firestore chunks
+function loadFileFromDb(fileId) {
+  if(!fileId || !db) return Promise.resolve(null);
+  var chunks = [];
+  var total = 0;
+  // Fetch all chunks for this file
+  return db.collection('files').where('fid','==',fileId).get().then(function(snap) {
+    if(snap.empty) { console.warn('📁 No chunks found for', fileId); return null; }
+    snap.forEach(function(doc) {
+      var d = doc.data();
+      chunks[d.ci] = d.d;
+      total = d.tc;
+    });
+    if(chunks.length < total) { console.warn('📁 Missing chunks:', chunks.length, '/', total); return null; }
+    return {name: snap.docs[0].data().n, size: snap.docs[0].data().s, type: snap.docs[0].data().t,
+            fileId: fileId, data: chunks.join('')};
+  }).catch(function(e) { console.error('📁 Load error:', e); return null; });
+}
+
 
 // Save a collection to Firestore
 function fbSaveCollection(colName, items) {
@@ -913,11 +925,11 @@ function fbListen() {
     {name:'tasks', target:function(d){tasks=d}},
     {name:'reports', target:function(d){
       // Preserve file data from local copies (Firestore strips base64)
-      d.forEach(function(nr){ var old=reports.find(function(o){return String(o.id)===String(nr.id)}); if(old){ if(old.file&&(old.file.data||old.file.url)&&(!nr.file||(!nr.file.data&&!nr.file.url))) nr.file=old.file; if(old.images&&old.images.length) nr.images=old.images; } });
+      d.forEach(function(nr){ var old=reports.find(function(o){return String(o.id)===String(nr.id)}); if(old){ if(old.file&&(old.file.data||old.file.url||old.file.fileId)&&(!nr.file||(!nr.file.data&&!nr.file.url&&!nr.file.fileId))) nr.file=old.file; if(old.images&&old.images.length) nr.images=old.images; } });
       reports=d;
     }},
     {name:'approvals', target:function(d){
-      d.forEach(function(na){ var old=approvals.find(function(o){return String(o.id)===String(na.id)}); if(old){ if(old.file&&(old.file.data||old.file.url)&&(!na.file||(!na.file.data&&!na.file.url))) na.file=old.file; if(old.responseFile&&(old.responseFile.data||old.responseFile.url)&&(!na.responseFile||(!na.responseFile.data&&!na.responseFile.url))) na.responseFile=old.responseFile; } });
+      d.forEach(function(na){ var old=approvals.find(function(o){return String(o.id)===String(na.id)}); if(old){ if(old.file&&(old.file.data||old.file.url||old.file.fileId)&&(!na.file||(!na.file.data&&!na.file.url&&!na.file.fileId))) na.file=old.file; if(old.responseFile&&(old.responseFile.data||old.responseFile.url||old.responseFile.fileId)&&(!na.responseFile||(!na.responseFile.data&&!na.responseFile.url&&!na.responseFile.fileId))) na.responseFile=old.responseFile; } });
       approvals=d;
     }},
     {name:'announcements', target:function(d){announcements=d}},
@@ -3028,23 +3040,50 @@ function downloadFile(dataUri, fileName) {
 
 function openReportFile(id) {
   var r = reports.find(function(x){return String(x.id)===String(id)});
-  if(r && r.file && r.file.url) { window.open(r.file.url, '_blank'); return; }
-  if(r && r.file && r.file.data) downloadFile(r.file.data, r.file.name);
-  else downloadFile(null);
+  if(!r || !r.file) { downloadFile(null); return; }
+  if(r.file.url) { window.open(r.file.url, '_blank'); return; }
+  if(r.file.data) { downloadFile(r.file.data, r.file.name); return; }
+  if(r.file.fileId) {
+    showToast('⏳ جاري تحميل الملف...','var(--blue)');
+    loadFileFromDb(r.file.fileId).then(function(f) {
+      if(f && f.data) { r.file.data = f.data; downloadFile(f.data, f.name); }
+      else { showToast('⚠️ تعذر تحميل الملف','#DC2626'); downloadFile(null); }
+    });
+    return;
+  }
+  downloadFile(null);
 }
 
 function openApprovalFile(id) {
   var a = approvals.find(function(x){return String(x.id)===String(id)});
-  if(a && a.file && a.file.url) { window.open(a.file.url, '_blank'); return; }
-  if(a && a.file && a.file.data) downloadFile(a.file.data, a.file.name);
-  else downloadFile(null);
+  if(!a || !a.file) { downloadFile(null); return; }
+  if(a.file.url) { window.open(a.file.url, '_blank'); return; }
+  if(a.file.data) { downloadFile(a.file.data, a.file.name); return; }
+  if(a.file.fileId) {
+    showToast('⏳ جاري تحميل الملف...','var(--blue)');
+    loadFileFromDb(a.file.fileId).then(function(f) {
+      if(f && f.data) { a.file.data = f.data; downloadFile(f.data, f.name); }
+      else { showToast('⚠️ تعذر تحميل الملف','#DC2626'); downloadFile(null); }
+    });
+    return;
+  }
+  downloadFile(null);
 }
 
 function openResponseFile(id) {
   var a = approvals.find(function(x){return String(x.id)===String(id)});
-  if(a && a.responseFile && a.responseFile.url) { window.open(a.responseFile.url, '_blank'); return; }
-  if(a && a.responseFile && a.responseFile.data) downloadFile(a.responseFile.data, a.responseFile.name);
-  else downloadFile(null);
+  if(!a || !a.responseFile) { downloadFile(null); return; }
+  if(a.responseFile.url) { window.open(a.responseFile.url, '_blank'); return; }
+  if(a.responseFile.data) { downloadFile(a.responseFile.data, a.responseFile.name); return; }
+  if(a.responseFile.fileId) {
+    showToast('⏳ جاري تحميل الملف...','var(--blue)');
+    loadFileFromDb(a.responseFile.fileId).then(function(f) {
+      if(f && f.data) { a.responseFile.data = f.data; downloadFile(f.data, f.name); }
+      else { showToast('⚠️ تعذر تحميل الملف','#DC2626'); downloadFile(null); }
+    });
+    return;
+  }
+  downloadFile(null);
 }
 
 
