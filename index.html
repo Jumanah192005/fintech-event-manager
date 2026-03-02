@@ -2366,7 +2366,7 @@ function addReport(status) {
   // Upload files in BACKGROUND — update report when done
   if(localFile && localFile.data) {
     uploadToStorage(localFile, 'reports').then(function(result) {
-      if(result && result.url) {
+      if(result && (result.fileId || result.url)) {
         var rpt = reports.find(function(r){return r.id===newId});
         if(rpt) { rpt.file = result; saveSession(); renderReports(); }
         showToast('📎 تم رفع المرفق','#059669');
@@ -2507,7 +2507,7 @@ function handleApproval(id, action) {
   // Upload response file in BACKGROUND
   if(localResponseFile && localResponseFile.data) {
     uploadToStorage(localResponseFile, 'responses').then(function(result) {
-      if(result && result.url) {
+      if(result && (result.fileId || result.url)) {
         var ap = approvals.find(function(a){return a.id===id});
         if(ap) { ap.responseFile = result; saveSession(); }
       }
@@ -2580,7 +2580,7 @@ function addApproval() {
   // Upload file in BACKGROUND
   if(localFile && localFile.data) {
     uploadToStorage(localFile, 'approvals').then(function(result) {
-      if(result && result.url) {
+      if(result && (result.fileId || result.url)) {
         var appr = approvals.find(function(a){return a.id===newId});
         if(appr) { appr.file = result; saveSession(); renderApprovals(); }
         showToast('📎 تم رفع المرفق','#059669');
