@@ -956,11 +956,30 @@ function fbListen() {
     {name:'tasks', target:function(d){tasks=d}},
     {name:'reports', target:function(d){
       // Preserve file data from local copies (Firestore strips base64)
-      d.forEach(function(nr){ var old=reports.find(function(o){return String(o.id)===String(nr.id)}); if(old){ if(old.file&&(old.file.data||old.file.url||old.file.fileId)&&(!nr.file||(!nr.file.data&&!nr.file.url&&!nr.file.fileId))) nr.file=old.file; if(old.images&&old.images.length) nr.images=old.images; } });
+      d.forEach(function(nr){
+        var old=reports.find(function(o){return String(o.id)===String(nr.id)});
+        if(old){
+          // Always preserve local base64 data (Firestore never has it)
+          if(old.file && old.file.data && nr.file) nr.file.data = old.file.data;
+          if(!nr.file && old.file) nr.file = old.file;
+          if(old.images && old.images.length) {
+            if(!nr.images || !nr.images.length) nr.images = old.images;
+            else nr.images.forEach(function(ni, idx){ if(old.images[idx] && old.images[idx].data) ni.data = old.images[idx].data; });
+          }
+        }
+      });
       reports=d;
     }},
     {name:'approvals', target:function(d){
-      d.forEach(function(na){ var old=approvals.find(function(o){return String(o.id)===String(na.id)}); if(old){ if(old.file&&(old.file.data||old.file.url||old.file.fileId)&&(!na.file||(!na.file.data&&!na.file.url&&!na.file.fileId))) na.file=old.file; if(old.responseFile&&(old.responseFile.data||old.responseFile.url||old.responseFile.fileId)&&(!na.responseFile||(!na.responseFile.data&&!na.responseFile.url&&!na.responseFile.fileId))) na.responseFile=old.responseFile; } });
+      d.forEach(function(na){
+        var old=approvals.find(function(o){return String(o.id)===String(na.id)});
+        if(old){
+          if(old.file && old.file.data && na.file) na.file.data = old.file.data;
+          if(!na.file && old.file) na.file = old.file;
+          if(old.responseFile && old.responseFile.data && na.responseFile) na.responseFile.data = old.responseFile.data;
+          if(!na.responseFile && old.responseFile) na.responseFile = old.responseFile;
+        }
+      });
       approvals=d;
     }},
     {name:'announcements', target:function(d){announcements=d}},
@@ -1069,6 +1088,7 @@ function sendEmailNotification(toEmail, subject, bodyHtml, callback) {
     try{emailjs.init(EMAILJS_KEY)}catch(e){}
     emailjs.send(EMAILJS_SERVICE, EMAILJS_TEMPLATE, {
       to_email: toEmail,
+      from_name: 'روافد الفنتك',
       subject: '🔔 ' + subject + ' — روافد الفنتك',
       message: styledBody
     }).then(function(){
@@ -2077,6 +2097,8 @@ function renderTasks() {
                 ${[10,20,30,40,50,60,70,80,90].map(v=>`<option value="${v}" ${t.progress===v?'selected':''}>${v}%</option>`).join('')}
               </select>`:''}
               ${t.status==='delayed'?`<button class="btn btn-secondary btn-sm" onclick="updateTask(${t.id},'in_progress',${t.progress})">▶️ استئناف</button>`:''}
+              <button class="btn btn-secondary btn-sm" onclick="showEditTaskModal(${t.id})">✏️ تعديل</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteTask(${t.id})">🗑️</button>
             </div>`:''}
         </div>`;
       }).join('')}`;
@@ -2085,6 +2107,57 @@ function renderTasks() {
 function updateTask(id, status, progress) {
   tasks = tasks.map(t => t.id===id ? {...t, status, progress, completedAt:status==='completed'?today():t.completedAt} : t);
   renderTasks();
+}
+
+function deleteTask(id) {
+  showModal('🗑️ تأكيد الحذف', '<p style="font-size:14px;color:var(--slate-700);text-align:center;margin-bottom:20px">هل أنت متأكد من حذف هذه المهمة؟</p><div style="display:flex;gap:10px"><button class="btn btn-danger btn-block" onclick="confirmDeleteTask('+id+')">🗑️ نعم، حذف</button><button class="btn btn-secondary btn-block" onclick="hideModal()">إلغاء</button></div>');
+}
+
+function confirmDeleteTask(id) {
+  tasks = tasks.filter(function(t){return t.id!==id});
+  fbDelete('tasks', id);
+  hideModal(); renderTasks(); saveSession();
+  showToast('🗑️ تم حذف المهمة','#DC2626');
+}
+
+function showEditTaskModal(id) {
+  var t = tasks.find(function(x){return x.id===id});
+  if(!t) return;
+  showModal('✏️ تعديل المهمة', 
+    '<div class="form-group"><label class="form-label">عنوان المهمة</label><input class="form-input" id="editTaskTitle" value="'+t.title+'"></div>' +
+    '<div class="form-group"><label class="form-label">الوصف</label><textarea class="form-textarea" id="editTaskDesc">'+( t.desc||'')+'</textarea></div>' +
+    '<div class="form-group"><label class="form-label">الأولوية</label><select class="form-select" id="editTaskPriority">' +
+      '<option value="low" '+(t.priority==='low'?'selected':'')+'>🟢 منخفضة</option>' +
+      '<option value="medium" '+(t.priority==='medium'?'selected':'')+'>🟡 متوسطة</option>' +
+      '<option value="high" '+(t.priority==='high'?'selected':'')+'>🔴 عالية</option>' +
+    '</select></div>' +
+    '<div class="form-group"><label class="form-label">الحالة</label><select class="form-select" id="editTaskStatus">' +
+      '<option value="not_started" '+(t.status==='not_started'?'selected':'')+'>لم تبدأ</option>' +
+      '<option value="in_progress" '+(t.status==='in_progress'?'selected':'')+'>قيد التنفيذ</option>' +
+      '<option value="completed" '+(t.status==='completed'?'selected':'')+'>مكتملة</option>' +
+      '<option value="delayed" '+(t.status==='delayed'?'selected':'')+'>متأخرة</option>' +
+    '</select></div>' +
+    '<div class="form-group"><label class="form-label">نسبة الإنجاز</label><input type="number" class="form-input" id="editTaskProgress" value="'+t.progress+'" min="0" max="100"></div>' +
+    '<div class="form-group"><label class="form-label">الموعد النهائي</label><input type="date" class="form-input" id="editTaskDeadline" value="'+(t.deadline||'')+'"></div>' +
+    '<button class="btn btn-primary btn-lg btn-block" onclick="saveEditTask('+id+')">💾 حفظ التعديلات</button>');
+}
+
+function saveEditTask(id) {
+  var title = document.getElementById('editTaskTitle').value.trim();
+  if(!title) { showToast('⚠️ يرجى إدخال عنوان المهمة','#DC2626'); return; }
+  tasks = tasks.map(function(t) {
+    if(t.id===id) return Object.assign({}, t, {
+      title: title,
+      desc: document.getElementById('editTaskDesc').value.trim(),
+      priority: document.getElementById('editTaskPriority').value,
+      status: document.getElementById('editTaskStatus').value,
+      progress: parseInt(document.getElementById('editTaskProgress').value)||0,
+      deadline: document.getElementById('editTaskDeadline').value||null
+    });
+    return t;
+  });
+  hideModal(); renderTasks(); saveSession();
+  showToast('✅ تم تعديل المهمة','#059669');
 }
 
 function showAddTaskModal() {
@@ -2418,13 +2491,16 @@ function addReport(status) {
     }
   }
 
-  // Same pattern as working addApproval: upload file first, then save
+  // Upload file first, then save with BOTH data (for current session) and fileId (for sync)
   if(localFile && localFile.data) {
     showToast('⏳ جاري حفظ الملف...','var(--blue)');
     uploadToStorage(localFile, 'reports').then(function(result) {
-      // Now upload images if any
+      // KEEP data in memory so file opens immediately
+      result.data = localFile.data;
       if(localImages && localImages.length) {
         uploadImagesToStorage(localImages).then(function(imgResults) {
+          // Keep image data too
+          imgResults.forEach(function(ir, idx) { if(localImages[idx] && localImages[idx].data) ir.data = localImages[idx].data; });
           doSave(result, imgResults);
         }).catch(function(e) { doSave(result, null); });
       } else {
@@ -2432,11 +2508,13 @@ function addReport(status) {
       }
     }).catch(function(e) {
       console.error('Report file save error:', e);
-      doSave({name:localFile.name, size:localFile.size, type:localFile.type}, null);
+      // Save with data only (no fileId) — works locally
+      doSave(localFile, null);
     });
   } else if(localImages && localImages.length) {
     showToast('⏳ جاري حفظ الصور...','var(--blue)');
     uploadImagesToStorage(localImages).then(function(imgResults) {
+      imgResults.forEach(function(ir, idx) { if(localImages[idx] && localImages[idx].data) ir.data = localImages[idx].data; });
       doSave(null, imgResults);
     }).catch(function(e) { doSave(null, null); });
   } else {
@@ -2566,8 +2644,9 @@ function handleApproval(id, action) {
   if(localResponseFile && localResponseFile.data) {
     showToast('⏳ جاري حفظ الملف...','var(--blue)');
     uploadToStorage(localResponseFile, 'responses').then(function(result) {
+      result.data = localResponseFile.data;
       doSave(result);
-    }).catch(function(e) { doSave(null); });
+    }).catch(function(e) { doSave(localResponseFile); });
   } else {
     doSave(null);
   }
@@ -2636,10 +2715,11 @@ function addApproval() {
   if(localFile && localFile.data) {
     showToast('⏳ جاري حفظ الملف...','var(--blue)');
     uploadToStorage(localFile, 'approvals').then(function(result) {
+      result.data = localFile.data;
       doSave(result);
     }).catch(function(e) {
       console.error('File save error:', e);
-      doSave({name:localFile.name, size:localFile.size, type:localFile.type});
+      doSave(localFile);
     });
   } else {
     doSave(null);
@@ -3067,26 +3147,38 @@ function downloadFile(dataUri, fileName) {
   try {
     var icon = (fileName||'').endsWith('.pdf') ? '📄' : '📝';
 
-    // If it's a URL (Firebase Storage), open in new tab
+    // If it's a URL, open in new tab
     if(dataUri.startsWith('http')) {
       window.open(dataUri, '_blank');
       return;
     }
 
-    // Base64: direct download
+    // Convert base64 to Blob for reliable mobile download
+    var blobUrl = dataUri;
+    try {
+      var parts = dataUri.split(',');
+      var mime = parts[0].match(/:(.*?);/)[1];
+      var raw = atob(parts[1]);
+      var arr = new Uint8Array(raw.length);
+      for(var i=0; i<raw.length; i++) arr[i] = raw.charCodeAt(i);
+      var blob = new Blob([arr], {type: mime});
+      blobUrl = URL.createObjectURL(blob);
+    } catch(e) { blobUrl = dataUri; }
+
+    // Download
     var a = document.createElement('a');
-    a.href = dataUri;
+    a.href = blobUrl;
     a.download = fileName || 'file';
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    setTimeout(function(){document.body.removeChild(a)}, 100);
+    setTimeout(function(){ document.body.removeChild(a); if(blobUrl !== dataUri) URL.revokeObjectURL(blobUrl); }, 500);
 
     showModal(icon + ' ' + fileName,
       '<div style="text-align:center;padding:20px">' +
       '<div style="font-size:56px;margin-bottom:14px">' + icon + '</div>' +
       '<div style="font-weight:800;font-size:17px;margin-bottom:16px;word-break:break-all">' + fileName + '</div>' +
-      '<a href="' + dataUri + '" download="' + fileName + '" ' +
+      '<a href="' + blobUrl + '" download="' + fileName + '" ' +
       'style="display:inline-flex;align-items:center;gap:8px;padding:14px 28px;' +
       'background:linear-gradient(135deg,#C8A45C,#A8842C);color:#fff;border-radius:12px;' +
       'font-weight:700;font-size:15px;text-decoration:none;font-family:Tajawal,sans-serif;' +
