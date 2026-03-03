@@ -804,9 +804,22 @@ function cleanForDb(obj) {
 // ═══════════════════════════════════════
 // FIREBASE STORAGE — Cloud File Storage
 // ═══════════════════════════════════════
-// ═══════════════════════════════════════
 // FILE STORAGE — Uses Firestore settings collection (proven working)
 // ═══════════════════════════════════════
+
+// Local file cache (survives page refresh)
+function cacheFileLocally(key, fileData) {
+  try { localStorage.setItem('fc_'+key, fileData); } catch(e) { console.warn('Cache full, clearing old files'); clearOldFileCache(); try { localStorage.setItem('fc_'+key, fileData); } catch(e2){} }
+}
+function getCachedFile(key) {
+  try { return localStorage.getItem('fc_'+key); } catch(e) { return null; }
+}
+function clearOldFileCache() {
+  var keys = [];
+  for(var i=0; i<localStorage.length; i++) { var k=localStorage.key(i); if(k.startsWith('fc_')) keys.push(k); }
+  keys.slice(0, Math.floor(keys.length/2)).forEach(function(k){ localStorage.removeItem(k); });
+}
+
 function uploadToStorage(fileObj, folder) {
   if(!_firebaseAvailable || !db || !fileObj || !fileObj.data) {
     console.warn('📁 Cannot save: fb='+_firebaseAvailable+' db='+!!db+' file='+!!fileObj);
@@ -2088,7 +2101,7 @@ function renderTasks() {
             <span>📊 ${t.progress}%</span>
           </div>
           <div class="progress-bar mt-10"><div class="progress-fill" style="width:${t.progress}%;background:${STATUS[t.status].color}"></div></div>
-          ${(currentUser.role==='admin'||currentUser.dept==5||String(t.assignedTo)===String(currentUser.id))?`
+          ${(currentUser.role==='admin'||currentUser.role==='supervisor'||currentUser.dept==5||String(t.assignedTo)===String(currentUser.id))?`
             <div class="task-actions">
               ${t.status!=='completed'?`<button class="btn btn-success btn-sm" onclick="updateTask(${t.id},'completed',100)">✅ إنجاز</button>`:''}
               ${t.status==='completed'?`<button class="btn btn-danger btn-sm" onclick="updateTask(${t.id},'in_progress',80)">↩️ تراجع</button>`:''}
@@ -2270,7 +2283,7 @@ function renderReports() {
               </div>
               <div style="font-size:16px;font-weight:700;margin-bottom:4px">${r.title}</div>
               <div style="font-size:13px;color:var(--slate-500);line-height:1.7">${r.content?(r.content.slice(0,200)+(r.content.length>200?'...':'')):'(تقرير بملف مرفق)'}</div>
-              ${r.file&&(r.file.data||r.file.url||r.file.fileId)?`<div onclick="openReportFile(${r.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${r.file.name?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${r.file.name?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${r.file.name?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${r.file.name?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${r.file.name?'#EFF6FF':'#F1F5F9'}'">📎 ${r.file.name} (${r.file.size}) — اضغط للتحميل ⬇️</div>`:''}
+              ${r.file&&r.file.name?`<div onclick="openReportFile(${r.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${r.file.name?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${r.file.name?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${r.file.name?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${r.file.name?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${r.file.name?'#EFF6FF':'#F1F5F9'}'">📎 ${r.file.name} (${r.file.size}) — اضغط للتحميل ⬇️</div>`:''}
               ${r.images&&r.images.length>0?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${r.images.map(function(img,imgIdx){var src=img.data||img.url||''; return src ? '<img src="'+src+'" onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid var(--slate-200);cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">':'<div onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;display:flex;align-items:center;justify-content:center;font-size:28px;background:#F1F5F9;border-radius:8px;border:2px solid #E2E8F0;cursor:pointer" title="اضغط لتحميل الصورة">🖼️</div>'}).join('')}</div>`:''}
               <div style="font-size:12px;color:var(--slate-400);margin-top:8px">✍️ ${(author&&author.name)||''} — 📅 ${r.date}</div>
               ${r.rejectReason?`<div style="margin-top:8px;padding:10px 14px;background:#FEF2F2;border-radius:8px;border:1px solid #FECACA"><span style="font-size:12px;color:#DC2626;font-weight:700">↩️ سبب الإرجاع:</span> <span style="font-size:12px;color:#991B1B">${r.rejectReason}</span></div>`:''}
@@ -2343,13 +2356,18 @@ function viewReportImage(reportId, imgIdx) {
   }
 
   if(src) { showImg(src); }
-  else if(img.fileId) {
-    showToast('⏳ جاري تحميل الصورة...','var(--blue)');
-    loadFileFromDb(img.fileId).then(function(f) {
-      if(f && f.data) { img.data = f.data; showImg(f.data); }
-      else showToast('⚠️ الصورة غير متاحة','#DC2626');
-    });
-  } else { showToast('⚠️ الصورة غير متاحة','#DC2626'); }
+  else {
+    // Check localStorage cache
+    var cached = getCachedFile('rptimg_'+reportId+'_'+imgIdx);
+    if(cached) { img.data = cached; showImg(cached); }
+    else if(img.fileId) {
+      showToast('⏳ جاري تحميل الصورة...','var(--blue)');
+      loadFileFromDb(img.fileId).then(function(f) {
+        if(f && f.data) { img.data = f.data; cacheFileLocally('rptimg_'+reportId+'_'+imgIdx, f.data); showImg(f.data); }
+        else showToast('⚠️ الصورة غير متاحة','#DC2626');
+      });
+    } else { showToast('⚠️ الصورة غير متاحة','#DC2626'); }
+  }
 }
 
 function remindSupervisorApprovals() {
@@ -2473,8 +2491,12 @@ function addReport(status) {
   hideModal();
 
   function doSave(fileResult, imagesResult) {
-    reports.push({id:Date.now(), title:title, content:content, author:currentUser.id, date:today(),
+    var rid = Date.now();
+    reports.push({id:rid, title:title, content:content, author:currentUser.id, date:today(),
       dept:deptVal, status:st, type:typeVal, file:fileResult, images:imagesResult});
+    // Cache file data locally for reliable access
+    if(fileResult && fileResult.data) cacheFileLocally('rpt_'+rid, fileResult.data);
+    if(imagesResult) imagesResult.forEach(function(img, idx) { if(img && img.data) cacheFileLocally('rptimg_'+rid+'_'+idx, img.data); });
     renderReports(); saveSession();
     var toastMsg = st==='published' ? '✅ تم نشر التقرير بنجاح' : st==='pending_approval' ? '📤 تم رفع التقرير — بانتظار موافقة المدير' : '📝 تم حفظ المسودة';
     showToast(toastMsg, st==='published' ? '#059669' : st==='pending_approval' ? '#D97706' : 'var(--blue)');
@@ -2698,10 +2720,12 @@ function addApproval() {
   hideModal();
 
   function doSave(fileResult) {
-    approvals.push({id:Date.now(), title:title, notes:localNotes, type:localType, urgency:localUrgency,
+    var aid = Date.now();
+    approvals.push({id:aid, title:title, notes:localNotes, type:localType, urgency:localUrgency,
       requester:currentUser.id, date:today(), status:'pending', approvedBy:null, approvedAt:null,
       file:fileResult
     });
+    if(fileResult && fileResult.data) cacheFileLocally('apr_'+aid, fileResult.data);
     updatePendingBadge(); renderApprovals(); saveSession();
     showToast('✅ تم رفع طلب الموافقة','#059669');
     var urgColor = localUrgency==='urgent'?'#DC2626':'#D97706';
@@ -3193,17 +3217,19 @@ function openReportFile(id) {
   if(!r || !r.file) { downloadFile(null); return; }
   if(r.file.url) { window.open(r.file.url, '_blank'); return; }
   if(r.file.data) { downloadFile(r.file.data, r.file.name); return; }
+  // Check localStorage cache
+  var cached = getCachedFile('rpt_'+id);
+  if(cached) { r.file.data = cached; downloadFile(cached, r.file.name); return; }
+  // Try Firestore
   if(r.file.fileId) {
     showToast('⏳ جاري تحميل الملف...','var(--blue)');
     loadFileFromDb(r.file.fileId).then(function(f) {
-      if(f && f.data) { r.file.data = f.data; downloadFile(f.data, f.name); }
-      else { showToast('⚠️ تعذر تحميل الملف من السيرفر','#DC2626'); }
+      if(f && f.data) { r.file.data = f.data; cacheFileLocally('rpt_'+id, f.data); downloadFile(f.data, f.name); }
+      else showToast('⚠️ تعذر تحميل الملف','#DC2626');
     });
     return;
   }
-  // Debug: show what the file object contains
-  console.warn('📁 Report file has no data/url/fileId:', JSON.stringify(r.file));
-  showToast('⚠️ الملف محفوظ بدون رابط — أعد رفعه','#DC2626');
+  showToast('⚠️ الملف غير متاح — يرجى إعادة رفعه','#DC2626');
 }
 
 function openApprovalFile(id) {
@@ -3211,15 +3237,17 @@ function openApprovalFile(id) {
   if(!a || !a.file) { downloadFile(null); return; }
   if(a.file.url) { window.open(a.file.url, '_blank'); return; }
   if(a.file.data) { downloadFile(a.file.data, a.file.name); return; }
+  var cached = getCachedFile('apr_'+id);
+  if(cached) { a.file.data = cached; downloadFile(cached, a.file.name); return; }
   if(a.file.fileId) {
     showToast('⏳ جاري تحميل الملف...','var(--blue)');
     loadFileFromDb(a.file.fileId).then(function(f) {
-      if(f && f.data) { a.file.data = f.data; downloadFile(f.data, f.name); }
-      else { showToast('⚠️ تعذر تحميل الملف','#DC2626'); downloadFile(null); }
+      if(f && f.data) { a.file.data = f.data; cacheFileLocally('apr_'+id, f.data); downloadFile(f.data, f.name); }
+      else showToast('⚠️ تعذر تحميل الملف','#DC2626');
     });
     return;
   }
-  downloadFile(null);
+  showToast('⚠️ الملف غير متاح — يرجى إعادة رفعه','#DC2626');
 }
 
 function openResponseFile(id) {
@@ -3231,11 +3259,11 @@ function openResponseFile(id) {
     showToast('⏳ جاري تحميل الملف...','var(--blue)');
     loadFileFromDb(a.responseFile.fileId).then(function(f) {
       if(f && f.data) { a.responseFile.data = f.data; downloadFile(f.data, f.name); }
-      else { showToast('⚠️ تعذر تحميل الملف','#DC2626'); downloadFile(null); }
+      else showToast('⚠️ تعذر تحميل الملف','#DC2626');
     });
     return;
   }
-  downloadFile(null);
+  showToast('⚠️ الملف غير متاح — يرجى إعادة رفعه','#DC2626');
 }
 
 
