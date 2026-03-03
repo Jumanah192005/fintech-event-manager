@@ -805,7 +805,7 @@ function cleanForDb(obj) {
 // FIREBASE STORAGE — Cloud File Storage
 // ═══════════════════════════════════════
 // ═══════════════════════════════════════
-// FILE STORAGE — Direct Firestore (no Firebase Storage needed)
+// FILE STORAGE — Uses Firestore settings collection (proven working)
 // ═══════════════════════════════════════
 function uploadToStorage(fileObj, folder) {
   if(!_firebaseAvailable || !db || !fileObj || !fileObj.data) {
@@ -818,13 +818,13 @@ function uploadToStorage(fileObj, folder) {
   var totalChunks = Math.ceil(data.length / chunkSize);
   console.log('📁 Saving', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+Math.round(data.length/1024)+'KB)');
 
-  var promises = [];
+  // Store file metadata + chunks in settings collection (known to work)
+  var meta = {name:fileObj.name, size:fileObj.size, type:fileObj.type, tc:totalChunks, ts:Date.now()};
+  var promises = [db.collection('settings').doc('file_'+fileId+'_meta').set(meta)];
+  
   for(var i=0; i<totalChunks; i++) {
     var chunk = data.substring(i * chunkSize, (i+1) * chunkSize);
-    promises.push(db.collection('files').doc(fileId + '_c' + i).set({
-      fid: fileId, ci: i, tc: totalChunks, d: chunk,
-      n: fileObj.name, s: fileObj.size, t: fileObj.type
-    }));
+    promises.push(db.collection('settings').doc('file_'+fileId+'_c'+i).set({d:chunk}));
   }
 
   return Promise.all(promises).then(function() {
@@ -833,7 +833,7 @@ function uploadToStorage(fileObj, folder) {
     return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId};
   }).catch(function(err) {
     console.error('📁 ❌ Save failed:', err);
-    showToast('📁 ❌ فشل حفظ الملف: '+err.message,'#DC2626');
+    showToast('📁 ❌ فشل حفظ الملف: '+(err.message||err),'#DC2626');
     return fileObj;
   });
 }
@@ -846,48 +846,40 @@ function uploadImagesToStorage(images) {
   }));
 }
 
-// Load file from Firestore chunks
+// Load file from Firestore settings
 function loadFileFromDb(fileId) {
   if(!fileId || !db) return Promise.resolve(null);
-  var chunks = [];
-  var total = 0;
-  // Fetch all chunks for this file
-  return db.collection('files').where('fid','==',fileId).get().then(function(snap) {
-    if(snap.empty) { console.warn('📁 No chunks found for', fileId); return null; }
-    snap.forEach(function(doc) {
-      var d = doc.data();
-      chunks[d.ci] = d.d;
-      total = d.tc;
+  return db.collection('settings').doc('file_'+fileId+'_meta').get().then(function(metaSnap) {
+    if(!metaSnap.exists) { console.warn('📁 No meta found for', fileId); return null; }
+    var meta = metaSnap.data();
+    var chunkPromises = [];
+    for(var i=0; i<meta.tc; i++) {
+      chunkPromises.push(db.collection('settings').doc('file_'+fileId+'_c'+i).get());
+    }
+    return Promise.all(chunkPromises).then(function(snaps) {
+      var data = '';
+      for(var i=0; i<snaps.length; i++) {
+        if(!snaps[i].exists) { console.warn('📁 Missing chunk', i); return null; }
+        data += snaps[i].data().d;
+      }
+      return {name:meta.name, size:meta.size, type:meta.type, fileId:fileId, data:data};
     });
-    if(chunks.length < total) { console.warn('📁 Missing chunks:', chunks.length, '/', total); return null; }
-    return {name: snap.docs[0].data().n, size: snap.docs[0].data().s, type: snap.docs[0].data().t,
-            fileId: fileId, data: chunks.join('')};
   }).catch(function(e) { console.error('📁 Load error:', e); return null; });
 }
+
 
 
 // Track recently deleted IDs to prevent onSnapshot from re-adding them
 var _deletedIds = {};
 
-// Save a collection to Firestore (FULL SYNC — also deletes orphaned docs)
+// Save a collection to Firestore (batch set)
 function fbSaveCollection(colName, items) {
   if(!_firebaseAvailable || !db) return Promise.resolve();
-  var localIds = items.map(function(i){ return String(i.id); });
-  return db.collection(colName).get().then(function(snap) {
-    var batch = db.batch();
-    // Delete docs that no longer exist locally
-    snap.forEach(function(doc) {
-      if(localIds.indexOf(doc.id) === -1) {
-        batch.delete(doc.ref);
-        console.log('🗑️ Deleting orphan from '+colName+':', doc.id);
-      }
-    });
-    // Set all current items
-    items.forEach(function(item) {
-      batch.set(db.collection(colName).doc(String(item.id)), cleanForDb(item));
-    });
-    return batch.commit();
-  }).catch(function(e){console.warn('FB save '+colName+':', e)});
+  var batch = db.batch();
+  items.forEach(function(item) {
+    batch.set(db.collection(colName).doc(String(item.id)), cleanForDb(item));
+  });
+  return batch.commit().catch(function(e){console.warn('FB save '+colName+':', e)});
 }
 
 function fbDelete(colName, id) {
@@ -1069,7 +1061,8 @@ function sendEmailNotification(toEmail, subject, bodyHtml, callback) {
       'هذا إشعار تلقائي من نظام إدارة فعالية روافد الفنتك<br>© '+new Date().getFullYear()+' نادي TechNation</div></div>';
 
     if(typeof emailjs==='undefined'){
-      console.log('📧 EmailJS not loaded — skipping email');
+      console.warn('📧 EmailJS not loaded — email not sent to:', toEmail);
+      showToast('📧 خدمة البريد غير متاحة حالياً','#D97706');
       if(callback) callback(false);
       return;
     }
@@ -2204,7 +2197,7 @@ function renderReports() {
               </div>
               <div style="font-size:16px;font-weight:700;margin-bottom:4px">${r.title}</div>
               <div style="font-size:13px;color:var(--slate-500);line-height:1.7">${r.content?(r.content.slice(0,200)+(r.content.length>200?'...':'')):'(تقرير بملف مرفق)'}</div>
-              ${r.file?`<div onclick="openReportFile(${r.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${r.file.name?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${r.file.name?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${r.file.name?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${r.file.name?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${r.file.name?'#EFF6FF':'#F1F5F9'}'">📎 ${r.file.name} (${r.file.size}) — اضغط للتحميل ⬇️</div>`:''}
+              ${r.file&&(r.file.data||r.file.url||r.file.fileId)?`<div onclick="openReportFile(${r.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${r.file.name?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${r.file.name?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${r.file.name?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${r.file.name?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${r.file.name?'#EFF6FF':'#F1F5F9'}'">📎 ${r.file.name} (${r.file.size}) — اضغط للتحميل ⬇️</div>`:''}
               ${r.images&&r.images.length>0?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${r.images.map(function(img,imgIdx){var src=img.data||img.url||''; return src ? '<img src="'+src+'" onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid var(--slate-200);cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">':'<div onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;display:flex;align-items:center;justify-content:center;font-size:28px;background:#F1F5F9;border-radius:8px;border:2px solid #E2E8F0;cursor:pointer" title="اضغط لتحميل الصورة">🖼️</div>'}).join('')}</div>`:''}
               <div style="font-size:12px;color:var(--slate-400);margin-top:8px">✍️ ${(author&&author.name)||''} — 📅 ${r.date}</div>
               ${r.rejectReason?`<div style="margin-top:8px;padding:10px 14px;background:#FEF2F2;border-radius:8px;border:1px solid #FECACA"><span style="font-size:12px;color:#DC2626;font-weight:700">↩️ سبب الإرجاع:</span> <span style="font-size:12px;color:#991B1B">${r.rejectReason}</span></div>`:''}
@@ -3112,11 +3105,13 @@ function openReportFile(id) {
     showToast('⏳ جاري تحميل الملف...','var(--blue)');
     loadFileFromDb(r.file.fileId).then(function(f) {
       if(f && f.data) { r.file.data = f.data; downloadFile(f.data, f.name); }
-      else { showToast('⚠️ تعذر تحميل الملف','#DC2626'); downloadFile(null); }
+      else { showToast('⚠️ تعذر تحميل الملف من السيرفر','#DC2626'); }
     });
     return;
   }
-  downloadFile(null);
+  // Debug: show what the file object contains
+  console.warn('📁 Report file has no data/url/fileId:', JSON.stringify(r.file));
+  showToast('⚠️ الملف محفوظ بدون رابط — أعد رفعه','#DC2626');
 }
 
 function openApprovalFile(id) {
@@ -4347,19 +4342,15 @@ function loadData() {
   } catch(e) {}
 }
 
-// Auto-save wrappers
+// Auto-save wrappers (only for sync functions - async ones already call saveSession inside)
 const _origUpdateTask = updateTask;
 updateTask = function(id, status, progress) { _origUpdateTask(id, status, progress); saveSession(); };
 const _origAddTask = addTask;
 addTask = function() { _origAddTask(); saveSession(); };
-const _origAddReport = addReport;
-addReport = function(status) { _origAddReport(status); saveSession(); };
+// addReport, handleApproval, addApproval are ASYNC — they call saveSession() after upload completes
+// DO NOT wrap them with extra saveSession() — it causes race conditions
 const _origPublishReport = publishReport;
 publishReport = function(id) { _origPublishReport(id); saveSession(); };
-const _origHandleApproval = handleApproval;
-handleApproval = function(id, action) { _origHandleApproval(id, action); saveSession(); };
-const _origAddApproval = addApproval;
-addApproval = function() { _origAddApproval(); saveSession(); };
 const _origAddAnn = addAnn;
 addAnn = function() { _origAddAnn(); saveSession(); };
 const _origAddMember = addMember;
