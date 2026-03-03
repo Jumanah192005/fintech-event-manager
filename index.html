@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="فنتك في حياتنا">
-<title>فنتك في حياتنا — نظام إدارة الفعالية</title>
+<meta name="apple-mobile-web-app-title" content="روافد الفنتك">
+<title>روافد الفنتك — نظام إدارة الفعالية</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&display=swap" rel="stylesheet">
 <style>
@@ -501,13 +501,30 @@ body {
 </head>
 <body>
 
+<!-- Fallback if JS fails -->
+<noscript><div style="padding:40px;text-align:center;font-family:sans-serif;direction:rtl"><h2>يرجى تفعيل JavaScript</h2></div></noscript>
+<script>
+// Global error handler — shows errors on mobile
+window.onerror = function(msg, url, line, col, err) {
+  console.error('❌ ERROR:', msg, 'line:', line);
+  var d = document.getElementById('_appError');
+  if(!d) {
+    d = document.createElement('div');
+    d.id = '_appError';
+    d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#FEE2E2;color:#991B1B;padding:12px 16px;font-size:12px;z-index:99999;direction:ltr;font-family:monospace;max-height:30vh;overflow:auto';
+    document.body.appendChild(d);
+  }
+  d.innerHTML += '<div>❌ '+msg+' (line:'+line+')</div>';
+};
+</script>
+
 <!-- ═══════════════ LOGIN SCREEN ═══════════════ -->
 <div id="loginScreen">
   <div id="loginStars"></div>
   <div class="login-card">
     <div class="text-center" style="margin-bottom:28px">
       <div class="login-logo">ف</div>
-      <div class="login-title">فنتك في حياتنا</div>
+      <div class="login-title">روافد الفنتك</div>
       <div class="login-sub">نظام إدارة ومتابعة الفعالية</div>
     </div>
     <div class="login-tabs" style="display:flex">
@@ -614,7 +631,7 @@ body {
       <button class="menu-btn" onclick="toggleSidebar()">☰</button>
       <div class="flex-center" style="gap:10px">
         <div class="topbar-logo">ف</div>
-        <div><div class="topbar-title">فنتك في حياتنا</div><div class="topbar-subtitle">Fintech in Our Lives</div></div>
+        <div><div class="topbar-title">روافد الفنتك</div><div class="topbar-subtitle">Rawafid Al-Fintech</div></div>
       </div>
     </div>
     <div class="topbar-user">
@@ -1019,11 +1036,11 @@ function sendEmailNotification(toEmail, subject, bodyHtml, callback) {
   try {
     var styledBody = '<div dir="rtl" style="font-family:Tajawal,Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#ffffff;border-radius:12px;border:1px solid #E2E8F0">' +
       '<div style="text-align:center;padding:16px 0;margin-bottom:20px;border-bottom:2px solid #C8A45C">' +
-      '<div style="font-size:28px;font-weight:900;color:#0F172A">فنتك في حياتنا</div>' +
+      '<div style="font-size:28px;font-weight:900;color:#0F172A">روافد الفنتك</div>' +
       '<div style="font-size:12px;color:#94A3B8;margin-top:4px">نظام إدارة ومتابعة الفعالية</div></div>' +
       bodyHtml +
       '<div style="margin-top:24px;padding-top:16px;border-top:1px solid #E2E8F0;text-align:center;font-size:11px;color:#94A3B8">' +
-      'هذا إشعار تلقائي من نظام إدارة فعالية فنتك في حياتنا<br>© '+new Date().getFullYear()+' نادي TechNation</div></div>';
+      'هذا إشعار تلقائي من نظام إدارة فعالية روافد الفنتك<br>© '+new Date().getFullYear()+' نادي TechNation</div></div>';
 
     if(typeof emailjs==='undefined'){
       console.log('📧 EmailJS not loaded — skipping email');
@@ -1033,7 +1050,7 @@ function sendEmailNotification(toEmail, subject, bodyHtml, callback) {
     try{emailjs.init(EMAILJS_KEY)}catch(e){}
     emailjs.send(EMAILJS_SERVICE, EMAILJS_TEMPLATE, {
       to_email: toEmail,
-      subject: '🔔 ' + subject + ' — فنتك في حياتنا',
+      subject: '🔔 ' + subject + ' — روافد الفنتك',
       message: styledBody
     }).then(function(){
       console.log('📧 Email sent to: '+toEmail);
@@ -1722,7 +1739,7 @@ function renderDashboard() {
       ${urgentApprovals.slice(0,3).map(a=>{
         const req=getMember(a.requester);
         return `<div onclick="navigate('approvals')" style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:10px;margin-bottom:6px;cursor:pointer;border:1px solid #FDE68A;transition:all 0.2s" onmouseover="this.style.transform='translateX(-4px)';this.style.boxShadow='0 2px 8px rgba(217,119,6,0.12)'" onmouseout="this.style.transform='';this.style.boxShadow=''">
-          <div style="flex:1;text-align:right"><div style="font-weight:700;font-size:14px">${a.title}</div><div style="font-size:11px;color:var(--slate-400)">${req?.name||''} — ${a.date}</div></div>
+          <div style="flex:1;text-align:right"><div style="font-weight:700;font-size:14px">${a.title}</div><div style="font-size:11px;color:var(--slate-400)">${(req&&req.name)||''} — ${a.date}</div></div>
           <span style="color:#D97706;font-size:18px">←</span>
         </div>`;
       }).join('')}
@@ -1781,7 +1798,7 @@ function renderDashboard() {
         const urgBg = daysLeft<=2 ? '#FEF2F2' : daysLeft<=5 ? '#FEF3C7' : '#ECFDF5';
         const urgText = daysLeft<0 ? 'متأخر '+Math.abs(daysLeft)+' يوم' : daysLeft===0 ? 'اليوم!' : 'باقي '+daysLeft+' يوم';
         return `<div onclick="navigate('tasks')" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;margin-bottom:6px;cursor:pointer;transition:all 0.2s;border:1px solid var(--slate-100)" onmouseover="this.style.background='var(--slate-50)';this.style.transform='translateX(-4px)'" onmouseout="this.style.background='';this.style.transform=''">
-          <div style="flex:1;text-align:right"><div style="font-weight:700;font-size:14px">${t.title}</div><div style="font-size:11px;color:var(--slate-400)">${m?.name||''} — ${t.deadline}</div></div>
+          <div style="flex:1;text-align:right"><div style="font-weight:700;font-size:14px">${t.title}</div><div style="font-size:11px;color:var(--slate-400)">${(m&&m.name)||''} — ${t.deadline}</div></div>
           <span style="padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;background:${urgBg};color:${urgColor}">${urgText}</span>
         </div>`;
       }).join('')}
@@ -1815,7 +1832,7 @@ function renderDashboard() {
         return `<div onclick="navigate('announcements')" style="padding:14px 16px;border-radius:10px;background:linear-gradient(135deg,#FFFBEB,#FFF);border:1px solid #FDE68A;margin-bottom:8px;cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform='translateX(-4px)'" onmouseout="this.style.transform=''">
           <div style="font-weight:700;font-size:14px;margin-bottom:4px">${a.title||a.content.slice(0,60)+(a.content.length>60?'...':'')}</div>
           ${a.title?`<div style="font-size:12px;color:var(--slate-500);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${a.content}</div>`:''}
-          <div style="font-size:11px;color:var(--slate-400);margin-top:6px">${author?.name||''} — ${a.date}</div>
+          <div style="font-size:11px;color:var(--slate-400);margin-top:6px">${(author&&author.name)||''} — ${a.date}</div>
         </div>`;
       }).join('')}
     </div>`:''}
@@ -1840,7 +1857,7 @@ function renderDashboard() {
           const m=getMember(t.assignedTo);
           return `<div onclick="navigate('tasks')" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--slate-100);cursor:pointer;transition:all 0.15s" onmouseover="this.style.paddingRight='8px';this.style.background='var(--slate-50)';this.style.borderRadius='8px'" onmouseout="this.style.paddingRight='0';this.style.background='';this.style.borderRadius=''">
             <div style="width:8px;height:8px;border-radius:50%;background:${STATUS[t.status].color};flex-shrink:0"></div>
-            <div style="flex:1"><div style="font-size:13px;font-weight:700">${t.title}</div><div style="font-size:11px;color:var(--slate-400)">${m?.name||''}</div></div>
+            <div style="flex:1"><div style="font-size:13px;font-weight:700">${t.title}</div><div style="font-size:11px;color:var(--slate-400)">${(m&&m.name)||''}</div></div>
             ${badge(STATUS[t.status].label,STATUS[t.status].color,STATUS[t.status].bg)}
           </div>`;
         }).join('')}
@@ -2020,7 +2037,7 @@ function renderTasks() {
           <div class="task-title">${t.title}</div>
           ${t.desc?`<div class="task-desc">${t.desc}</div>`:''}
           <div class="task-meta">
-            <span>👤 ${m?.name||'غير محدد'}</span>
+            <span>👤 ${(m&&m.name)||'غير محدد'}</span>
             ${t.deadline?`<span>📅 ${t.deadline}</span>`:''}
             <span>📊 ${t.progress}%</span>
           </div>
@@ -2071,8 +2088,8 @@ function showAddTaskModal() {
 }
 
 function filterTaskMembersSearch() {
-  var deptId = parseInt(document.getElementById('newTaskDept')?.value) || 0;
-  var teamId = parseInt(document.getElementById('newTaskTeam')?.value) || 0;
+  var deptId = parseInt((document.getElementById('newTaskDept')||{}).value) || 0;
+  var teamId = parseInt((document.getElementById('newTaskTeam')||{}).value) || 0;
   var listEl = document.getElementById('taskAssignContainer_list');
   if(!listEl) return;
   var items = listEl.querySelectorAll('.search-select-item');
@@ -2090,7 +2107,7 @@ function addTask() {
   const title=$('newTaskTitle').value.trim();
   if(!title) { showToast('⚠️ يرجى إدخال عنوان المهمة','#DC2626'); return; }
   tasks.push({id:Date.now(),title,desc:$('newTaskDesc').value,assignedTo:parseInt($('newTaskAssign').value)||currentUser.id,
-    dept:parseInt($('newTaskDept').value)||null,teamId:parseInt($('newTaskTeam')?.value)||null,status:'not_started',priority:$('newTaskPriority').value,
+    dept:parseInt($('newTaskDept').value)||null,teamId:parseInt(($('newTaskTeam')||{}).value)||null,status:'not_started',priority:$('newTaskPriority').value,
     deadline:$('newTaskDeadline').value,createdAt:today(),progress:0});
   var newTask = tasks[tasks.length-1];
   hideModal(); renderTasks();
@@ -2155,8 +2172,8 @@ function renderReports() {
               <div style="font-size:16px;font-weight:700;margin-bottom:4px">${r.title}</div>
               <div style="font-size:13px;color:var(--slate-500);line-height:1.7">${r.content?(r.content.slice(0,200)+(r.content.length>200?'...':'')):'(تقرير بملف مرفق)'}</div>
               ${r.file?`<div onclick="openReportFile(${r.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${r.file.name?'#EFF6FF':'#F1F5F9'};border-radius:8px;font-size:12px;color:${r.file.name?'var(--blue)':'var(--slate-400)'};font-weight:600;margin-top:8px;cursor:pointer;transition:all 0.2s;border:1px solid ${r.file.name?'#BFDBFE':'#E2E8F0'}" onmouseover="this.style.background='${r.file.name?'#DBEAFE':'#F1F5F9'}'" onmouseout="this.style.background='${r.file.name?'#EFF6FF':'#F1F5F9'}'">📎 ${r.file.name} (${r.file.size}) — اضغط للتحميل ⬇️</div>`:''}
-              ${r.images&&r.images.length>0?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${r.images.map(function(img,imgIdx){return '<img src="'+(img.url||img.data)+'" onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid var(--slate-200);cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">'}).join('')}</div>`:''}
-              <div style="font-size:12px;color:var(--slate-400);margin-top:8px">✍️ ${author?.name||''} — 📅 ${r.date}</div>
+              ${r.images&&r.images.length>0?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${r.images.map(function(img,imgIdx){var src=img.data||img.url||''; return src ? '<img src="'+src+'" onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid var(--slate-200);cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">':'<div onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;display:flex;align-items:center;justify-content:center;font-size:28px;background:#F1F5F9;border-radius:8px;border:2px solid #E2E8F0;cursor:pointer" title="اضغط لتحميل الصورة">🖼️</div>'}).join('')}</div>`:''}
+              <div style="font-size:12px;color:var(--slate-400);margin-top:8px">✍️ ${(author&&author.name)||''} — 📅 ${r.date}</div>
               ${r.rejectReason?`<div style="margin-top:8px;padding:10px 14px;background:#FEF2F2;border-radius:8px;border:1px solid #FECACA"><span style="font-size:12px;color:#DC2626;font-weight:700">↩️ سبب الإرجاع:</span> <span style="font-size:12px;color:#991B1B">${r.rejectReason}</span></div>`:''}
             </div>
             <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-start;flex-shrink:0">
@@ -2214,13 +2231,26 @@ function viewReportImage(reportId, imgIdx) {
   if(!rpt||!rpt.images||!rpt.images[imgIdx]) return;
   var img = rpt.images[imgIdx];
   var total = rpt.images.length;
-  showModal('🖼️ صورة '+(imgIdx+1)+' من '+total+' — '+rpt.title,
-    '<div style="text-align:center">' +
-    '<img src="'+(img.url||img.data)+'" style="max-width:100%;max-height:70vh;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1)">' +
-    '<div style="margin-top:12px;display:flex;gap:8px;justify-content:center">' +
-    (imgIdx>0?'<button class="btn btn-secondary" onclick="viewReportImage('+reportId+','+(imgIdx-1)+')">→ السابقة</button>':'') +
-    (imgIdx<total-1?'<button class="btn btn-secondary" onclick="viewReportImage('+reportId+','+(imgIdx+1)+')">← التالية</button>':'') +
-    '</div></div>');
+  var src = img.data || img.url || '';
+
+  function showImg(src) {
+    showModal('🖼️ صورة '+(imgIdx+1)+' من '+total+' — '+rpt.title,
+      '<div style="text-align:center">' +
+      '<img src="'+src+'" style="max-width:100%;max-height:70vh;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1)">' +
+      '<div style="margin-top:12px;display:flex;gap:8px;justify-content:center">' +
+      (imgIdx>0?'<button class="btn btn-secondary" onclick="viewReportImage('+reportId+','+(imgIdx-1)+')">→ السابقة</button>':'') +
+      (imgIdx<total-1?'<button class="btn btn-secondary" onclick="viewReportImage('+reportId+','+(imgIdx+1)+')">← التالية</button>':'') +
+      '</div></div>');
+  }
+
+  if(src) { showImg(src); }
+  else if(img.fileId) {
+    showToast('⏳ جاري تحميل الصورة...','var(--blue)');
+    loadFileFromDb(img.fileId).then(function(f) {
+      if(f && f.data) { img.data = f.data; showImg(f.data); }
+      else showToast('⚠️ الصورة غير متاحة','#DC2626');
+    });
+  } else { showToast('⚠️ الصورة غير متاحة','#DC2626'); }
 }
 
 function remindSupervisorApprovals() {
@@ -2275,6 +2305,7 @@ function deleteReport(id) {
 }
 function confirmDeleteReport(id) {
   reports = reports.filter(r => r.id !== id);
+  fbDelete('reports', id);
   hideModal(); renderReports(); saveSession();
 }
 
@@ -2283,6 +2314,7 @@ function deleteApproval(id) {
 }
 function confirmDeleteApproval(id) {
   approvals = approvals.filter(a => a.id !== id);
+  fbDelete('approvals', id);
   hideModal(); updatePendingBadge(); renderApprovals(); saveSession();
 }
 
@@ -2334,8 +2366,8 @@ function addReport(status) {
   if(!title) { showToast('⚠️ يرجى إدخال عنوان التقرير','#DC2626'); return; }
   if(!content && !reportFile) { showToast('⚠️ يرجى كتابة محتوى أو إرفاق ملف','#DC2626'); return; }
 
-  var deptVal = parseInt($('newReportDept')?.value)||null;
-  var typeVal = $('newReportType')?.value||'progress';
+  var deptVal = parseInt(($('newReportDept')||{}).value)||null;
+  var typeVal = ($('newReportType')||{}).value||'progress';
   var localFile = reportFile ? Object.assign({},reportFile) : null;
   var localImages = reportImages.length>0 ? reportImages.slice() : null;
   reportFile=null; reportImages=[];
@@ -2419,7 +2451,7 @@ function renderApprovals() {
               ${a.comment?`<div style="padding:10px 14px;border-radius:8px;background:${a.status==='rejected'?'#FEF2F2':'#ECFDF5'};border-right:3px solid ${a.status==='rejected'?'var(--red)':'var(--green)'};margin-top:8px;font-size:12px;color:var(--slate-700)"><strong>${a.status==='rejected'?'سبب الرفض':'تعليق المشرف'}:</strong> ${a.comment}</div>`:''}
               ${a.responseFile?`<div onclick="openResponseFile(${a.id})" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:${a.responseFile.name?'#ECFDF5':'#F1F5F9'};border-radius:8px;font-size:12px;color:${a.responseFile.name?'var(--green)':'var(--slate-400)'};font-weight:600;margin-top:6px;cursor:pointer;border:1px solid ${a.responseFile.name?'#A7F3D0':'#E2E8F0'}">📎 مرفق المشرف: ${a.responseFile.name} — اضغط للتحميل ⬇️</div>`:''}
               <div style="font-size:12px;color:var(--slate-400);margin-top:8px">
-                👤 مقدم الطلب: ${req?.name||''} — 📅 ${a.date}
+                👤 مقدم الطلب: ${(req&&req.name)||''} — 📅 ${a.date}
                 ${appr?` — ✅ ${appr.name} (${a.approvedAt})`:''}
               </div>
             </div>
@@ -2481,7 +2513,7 @@ function showApprovalActionModal(id, action) {
 }
 
 function handleApproval(id, action) {
-  var comment = document.getElementById('approvalComment')?.value?.trim() || '';
+  var comment = (document.getElementById('approvalComment')||{value:''}).value.trim();
   if(action === 'rejected' && !comment) { showToast('⚠️ يرجى كتابة سبب الرفض','#DC2626'); return; }
 
   var localResponseFile = responseFileData ? Object.assign({},responseFileData) : null;
@@ -2720,7 +2752,7 @@ function renderTeams() {
         const done=mt.filter(t=>t.status==='completed').length;
         return `<div class="member-card">
           <div class="member-avatar" style="background:linear-gradient(135deg,var(--gold),var(--gold-dark))">${m.name.charAt(0)}</div>
-          <div style="flex:1"><div style="font-weight:700;font-size:13px">${m.name}</div><div style="font-size:11px;color:var(--slate-400)">${team?.name||'غير محدد'}</div>
+          <div style="flex:1"><div style="font-weight:700;font-size:13px">${m.name}</div><div style="font-size:11px;color:var(--slate-400)">${(team&&team.name)||'غير محدد'}</div>
           <div style="display:flex;gap:6px;margin-top:6px">${badge(mt.length+' مهمة','#2563EB')} ${badge(done+' مكتمل','#059669')}</div></div>
         </div>`;
       }).join('')}</div>
@@ -2734,7 +2766,7 @@ function renderTeams() {
         const roleBg = m.role==='admin'?'linear-gradient(135deg,var(--gold),var(--gold-dark))':m.role==='supervisor'?'var(--blue)':'var(--slate-500)';
         return `<div class="member-card">
           <div class="member-avatar" style="background:${roleBg}">${m.name.charAt(0)}</div>
-          <div style="flex:1"><div style="font-weight:700;font-size:13px">${m.name}</div><div style="font-size:11px;color:var(--slate-400)">${team?.name||m.title}</div></div>
+          <div style="flex:1"><div style="font-weight:700;font-size:13px">${m.name}</div><div style="font-size:11px;color:var(--slate-400)">${(team&&team.name)||m.title}</div></div>
           ${badge(m.role==='admin'?'مدير':m.role==='supervisor'?'مشرف':'عضو',roleColor)}
         </div>`;
       }).join('')}</div>
@@ -2779,7 +2811,7 @@ function addMember() {
   if(!name||!email) { showToast('⚠️ يرجى إدخال الاسم والإيميل','#DC2626'); return; }
   const teamId=parseInt($('newMemberTeam').value)||null;
   const team=getTeam(teamId);
-  members.push({id:Date.now(),name,email,role:'member',teamId,dept:team?.dept.id||null,title:'عضو'});
+  members.push({id:Date.now(),name,email,role:'member',teamId,dept:(team&&team.dept?team.dept.id:null),title:'عضو'});
   hideModal(); renderTeams();
 }
 
@@ -2791,7 +2823,7 @@ function renderStructure() {
     <div class="flex-between page-header animate-in">
       <div>
         <div class="page-title">🏛️ الهيكل التنظيمي</div>
-        <div class="page-sub">فعالية فنتك في حياتنا — 5 إدارات و16 فريق عمل</div>
+        <div class="page-sub">فعالية روافد الفنتك — 5 إدارات و16 فريق عمل</div>
       </div>
     </div>
     <div class="founder-card animate-in" style="animation-delay:0.05s">
@@ -3220,7 +3252,7 @@ function filterTaskTeams() {
 
 function filterTaskMembers() {
   var deptId = parseInt(document.getElementById('newTaskDept').value) || 0;
-  var teamId = parseInt(document.getElementById('newTaskTeam')?.value) || 0;
+  var teamId = parseInt((document.getElementById('newTaskTeam')||{}).value) || 0;
   var sel = document.getElementById('newTaskAssign');
   var opts = sel.querySelectorAll('option');
   opts.forEach(function(o) {
@@ -3293,8 +3325,8 @@ function showAddWarningModal() {
 }
 
 function filterWarnMembersSearch() {
-  var deptId = parseInt(document.getElementById('newWarnDept')?.value) || 0;
-  var teamId = parseInt(document.getElementById('newWarnTeam')?.value) || 0;
+  var deptId = parseInt((document.getElementById('newWarnDept')||{}).value) || 0;
+  var teamId = parseInt((document.getElementById('newWarnTeam')||{}).value) || 0;
   var listEl = document.getElementById('warnTargetContainer_list');
   if(!listEl) return;
   listEl.querySelectorAll('.search-select-item').forEach(function(it){
@@ -3324,7 +3356,7 @@ function filterWarnTeams(prefix) {
 
 function filterWarnMembers() {
   var deptId = parseInt(document.getElementById('newWarnDept').value) || 0;
-  var teamId = parseInt(document.getElementById('newWarnTeam')?.value) || 0;
+  var teamId = parseInt((document.getElementById('newWarnTeam')||{}).value) || 0;
   var sel = document.getElementById('newWarnTarget');
   var opts = sel.querySelectorAll('option');
   opts.forEach(function(o) {
@@ -3808,12 +3840,12 @@ function deleteWbsTask(phaseId, taskIdx) {
 // INTERACTIVE ORGANIZATIONAL REPORT
 // ═══════════════════════════════════════════════════════════════
 var orgReportDefault = [
-  {id:1,title:'مقدمة',icon:'📖',color:'#0F172A',content:'فعالية "فنتك في حياتنا" هي فعالية جامعية رائدة تهدف إلى نشر الوعي بالتقنية المالية (Fintech) وتمكين الشباب والشابات من فهم التحول الرقمي في القطاع المالي والمساهمة فيه بوعي وكفاءة. تُقام الفعالية بالتعاون بين نادي المالية ونادي تكنيشن في جامعة الإمام محمد بن سعود الإسلامية، وتتضمن جلسات حوارية مع خبراء، وتجارب تفاعلية، وورش عمل، وأركان تعليمية متنوعة.\nيستعرض هذا التقرير الهيكل التنظيمي الكامل للفعالية، ويشرح بالتفصيل كل إدارة وفرق العمل التابعة لها، مع توضيح مهام كل فريق ومسؤولياته بشكل دقيق.',subs:[]},
+  {id:1,title:'مقدمة',icon:'📖',color:'#0F172A',content:'فعالية "روافد الفنتك" هي فعالية جامعية رائدة تهدف إلى نشر الوعي بالتقنية المالية (Fintech) وتمكين الشباب والشابات من فهم التحول الرقمي في القطاع المالي والمساهمة فيه بوعي وكفاءة. تُقام الفعالية بالتعاون بين نادي المالية ونادي تكنيشن في جامعة الإمام محمد بن سعود الإسلامية، وتتضمن جلسات حوارية مع خبراء، وتجارب تفاعلية، وورش عمل، وأركان تعليمية متنوعة.\nيستعرض هذا التقرير الهيكل التنظيمي الكامل للفعالية، ويشرح بالتفصيل كل إدارة وفرق العمل التابعة لها، مع توضيح مهام كل فريق ومسؤولياته بشكل دقيق.',subs:[]},
   {id:2,title:'الرؤية والرسالة',icon:'🎯',color:'#7C3AED',content:'',subs:[
-    {title:'الرؤية',content:'أن تكون فعالية "فنتك في حياتنا" فعالية جامعية رائدة في نشر الوعي بالتقنية المالية، وتمكين الشباب والشابات من فهم التحول الرقمي في القطاع المالي والمساهمة فيه بوعي وكفاءة.'},
+    {title:'الرؤية',content:'أن تكون فعالية "روافد الفنتك" فعالية جامعية رائدة في نشر الوعي بالتقنية المالية، وتمكين الشباب والشابات من فهم التحول الرقمي في القطاع المالي والمساهمة فيه بوعي وكفاءة.'},
     {title:'الرسالة',content:'تقديم محتوى معرفي وتطبيقي في مجال التقنية المالية عبر جلسات حوارية وتجارب تفاعلية يقودها مختصون، بهدف ربط المفاهيم النظرية بالواقع العملي، وتحفيز الطلبة على استكشاف الفرص المهنية والاستثمارية في قطاع الفنتك.'}
   ]},
-  {id:3,title:'نظرة عامة على الهيكل التنظيمي',icon:'🏛️',color:'#059669',content:'يتكون الهيكل التنظيمي لفعالية "فنتك في حياتنا" من خمس إدارات رئيسية تضم 12 فريق عمل متخصص، يعمل كل منها بتناغم لتحقيق أهداف الفعالية.',subs:[]},
+  {id:3,title:'نظرة عامة على الهيكل التنظيمي',icon:'🏛️',color:'#059669',content:'يتكون الهيكل التنظيمي لفعالية "روافد الفنتك" من خمس إدارات رئيسية تضم 12 فريق عمل متخصص، يعمل كل منها بتناغم لتحقيق أهداف الفعالية.',subs:[]},
   {id:4,title:'تسلسل العمل بين الإدارات والفرق',icon:'🔄',color:'#D97706',content:'يوضح هذا القسم كيف تترابط الإدارات والفرق مع بعضها، وما هو تسلسل العمل والتحويلات بينها.',subs:[
     {title:'مسار استقطاب الشركات والرعاة',content:'فريق الشراكات والتعاونات يحدد الشركات المستهدفة ← فريق الرعايات يتواصل مع الجهات المحتملة ← عند الموافقة يتم التحويل لفريق تجربة الشركات ← التنسيق مع فريق التنظيم لتجهيز الموقع'},
     {title:'مسار المحتوى والتسويق',content:'فريق الأبحاث يكتب المحتوى ← فريق التصميم يحوله لتصاميم ← فريق التسويق ينشره ← فريق التصوير يوفر الصور والفيديوهات'},
@@ -3845,7 +3877,7 @@ var orgReportDefault = [
   {id:9,title:'5. إدارة الموارد البشرية',icon:'👥',color:'#8B5CF6',content:'إدارة الكوادر البشرية من الاستقطاب إلى قياس الأداء. إدارة موحدة:',subs:[
     {title:'5.1 إدارة الموارد البشرية',content:'جميع مهام الاستقطاب والمتابعة وقياس الأداء.',tasks:['نشر إعلانات التطوع واستقبال الطلبات','فرز المتقدمين وتوزيعهم على الفرق المناسبة','إعداد برامج التهيئة والتدريب للمتطوعين','متابعة التزام المتطوعين وحضورهم','وضع معايير تقييم الأداء وإجراء تقييمات دورية','إدارة قنوات التواصل الداخلي وتنظيم اجتماعات دورية','إعداد شهادات التطوع وخطابات الشكر','حل الخلافات وتعزيز روح الفريق']}
   ]},
-  {id:10,title:'الخاتمة',icon:'✨',color:'#0F172A',content:'يعكس الهيكل التنظيمي لفعالية "فنتك في حياتنا" مستوى عالياً من التنظيم والاحترافية، حيث تم توزيع المهام بشكل دقيق على خمس إدارات رئيسية تضم 12 فريق عمل. هذا التوزيع يضمن التكامل بين جميع الجوانب، مما يضمن تقديم تجربة مميزة للزوار والشركاء على حد سواء.',subs:[]}
+  {id:10,title:'الخاتمة',icon:'✨',color:'#0F172A',content:'يعكس الهيكل التنظيمي لفعالية "روافد الفنتك" مستوى عالياً من التنظيم والاحترافية، حيث تم توزيع المهام بشكل دقيق على خمس إدارات رئيسية تضم 12 فريق عمل. هذا التوزيع يضمن التكامل بين جميع الجوانب، مما يضمن تقديم تجربة مميزة للزوار والشركاء على حد سواء.',subs:[]}
 ];
 
 var orgReportSections = JSON.parse(localStorage.getItem('fintech_org_report')||'null') || orgReportDefault;
@@ -3862,7 +3894,7 @@ function renderOrgReport() {
     '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">' +
     '<div style="font-size:40px">📄</div>' +
     '<div style="flex:1"><div style="font-size:22px;font-weight:900;margin-bottom:4px">تقرير الهيكل التنظيمي</div>' +
-    '<div style="font-size:13px;opacity:0.7">فعالية فنتك في حياتنا — التقرير التفصيلي الشامل</div>' +
+    '<div style="font-size:13px;opacity:0.7">فعالية روافد الفنتك — التقرير التفصيلي الشامل</div>' +
     '<div style="display:flex;gap:20px;margin-top:12px;flex-wrap:wrap">' +
     '<span style="font-size:12px;opacity:0.8">📂 '+orgReportSections.length+' قسم</span>' +
     '<span style="font-size:12px;opacity:0.8">👥 '+totalTeams+' فريق</span>' +
@@ -4091,7 +4123,7 @@ function renderWBSDiagram() {
 
     // Level 0 - Project
     '<div style="text-align:center;margin-bottom:24px">' +
-    '<div style="display:inline-block;padding:16px 32px;background:linear-gradient(135deg,var(--navy),var(--navy-light));color:#fff;border-radius:14px;font-weight:900;font-size:16px;box-shadow:0 4px 20px rgba(15,23,42,0.3)">🎯 فنتك في حياتنا</div>' +
+    '<div style="display:inline-block;padding:16px 32px;background:linear-gradient(135deg,var(--navy),var(--navy-light));color:#fff;border-radius:14px;font-weight:900;font-size:16px;box-shadow:0 4px 20px rgba(15,23,42,0.3)">🎯 روافد الفنتك</div>' +
     '<div style="width:2px;height:24px;background:var(--slate-300);margin:0 auto"></div></div>' +
 
     // Level 1 - WBS Phases
@@ -4303,7 +4335,10 @@ addMember = function() { _origAddMember(); saveSession(); };
 // INITIALIZATION WITH FIREBASE AUTH
 // ═══════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', function() {
+  try {
   initStars();
+  } catch(e) { console.warn('Stars init failed:', e); }
+  try {
   // Clear stale localStorage cache EXCEPT reports/approvals (they have file data)
   ['fintech_tasks','fintech_announcements',
    'fintech_members','fintech_warnings','fintech_bugs','fintech_companies',
@@ -4311,7 +4346,13 @@ document.addEventListener('DOMContentLoaded', function() {
     localStorage.removeItem(k);
   });
   loadData(); // Load cached data from localStorage first (fast)
+  } catch(e) { console.warn('Data load failed:', e); }
+  try {
   loadFirebaseScripts(); // Try to load Firebase (async)
+  } catch(e) {
+    console.error('Firebase load failed:', e);
+    startOfflineMode();
+  }
 });
 
 // Handle Enter key on login
