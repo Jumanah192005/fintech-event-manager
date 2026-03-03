@@ -2730,6 +2730,7 @@ function deleteAnnouncement(id) {
 
 function confirmDeleteAnn(id) {
   announcements = announcements.filter(function(a){return a.id!==id});
+  fbDelete('announcements', id);
   hideModal(); renderAnnouncements(); saveSession();
   showToast('🗑️ تم حذف الإعلان','#DC2626');
 }
@@ -3601,6 +3602,7 @@ function confirmDeleteCompany(id, name) {
 
 function deleteCompany(id) {
   companies = companies.filter(function(c){return c.id!==id});
+  fbDelete('companies', id);
   saveCompanies(); hideModal(); renderCompanies();
 }
 
