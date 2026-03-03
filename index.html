@@ -866,23 +866,41 @@ function loadFileFromDb(fileId) {
 }
 
 
-// Save a collection to Firestore
+// Track recently deleted IDs to prevent onSnapshot from re-adding them
+var _deletedIds = {};
+
+// Save a collection to Firestore (FULL SYNC — also deletes orphaned docs)
 function fbSaveCollection(colName, items) {
-  if(!_fbReady || !_firebaseAvailable || !db) return Promise.resolve();
-  var batch = db.batch();
-  items.forEach(function(item) {
-    batch.set(db.collection(colName).doc(String(item.id)), cleanForDb(item));
-  });
-  return batch.commit().catch(function(e){console.warn('FB save '+colName+':', e)});
+  if(!_firebaseAvailable || !db) return Promise.resolve();
+  var localIds = items.map(function(i){ return String(i.id); });
+  return db.collection(colName).get().then(function(snap) {
+    var batch = db.batch();
+    // Delete docs that no longer exist locally
+    snap.forEach(function(doc) {
+      if(localIds.indexOf(doc.id) === -1) {
+        batch.delete(doc.ref);
+        console.log('🗑️ Deleting orphan from '+colName+':', doc.id);
+      }
+    });
+    // Set all current items
+    items.forEach(function(item) {
+      batch.set(db.collection(colName).doc(String(item.id)), cleanForDb(item));
+    });
+    return batch.commit();
+  }).catch(function(e){console.warn('FB save '+colName+':', e)});
 }
 
 function fbDelete(colName, id) {
-  if(!_fbReady || !_firebaseAvailable || !db) return;
-  db.collection(colName).doc(String(id)).delete().catch(function(e){});
+  if(!_firebaseAvailable || !db) return;
+  // Track deleted ID to block onSnapshot re-adding
+  _deletedIds[colName+'_'+id] = Date.now();
+  db.collection(colName).doc(String(id)).delete().then(function() {
+    console.log('🗑️ Deleted from Firestore:', colName, id);
+  }).catch(function(e){ console.warn('Delete failed:', colName, id, e); });
 }
 
 function fbSaveSettings(key, data) {
-  if(!_fbReady || !_firebaseAvailable || !db) return;
+  if(!_firebaseAvailable || !db) return;
   db.collection('settings').doc(key).set({data:JSON.stringify(data)}).catch(function(e){});
 }
 
@@ -961,7 +979,15 @@ function fbListen() {
   cols.forEach(function(col) {
     db.collection(col.name).onSnapshot(function(snap) {
       if(_suppressSync) return;
-      var newData = snap.docs.map(function(d){return d.data()});
+      var newData = snap.docs.map(function(d){return d.data()}).filter(function(item) {
+        // Block recently deleted items from coming back (within 30 seconds)
+        var key = col.name+'_'+item.id;
+        if(_deletedIds[key] && (Date.now() - _deletedIds[key]) < 30000) {
+          console.log('🚫 Blocked deleted item:', key);
+          return false;
+        }
+        return true;
+      });
       col.target(newData);
       console.log('🔄 Synced '+col.name+': '+newData.length+' docs');
       if(currentUser && _fbReady) {
@@ -1053,10 +1079,11 @@ function sendEmailNotification(toEmail, subject, bodyHtml, callback) {
       subject: '🔔 ' + subject + ' — روافد الفنتك',
       message: styledBody
     }).then(function(){
-      console.log('📧 Email sent to: '+toEmail);
+      console.log('📧 ✅ Email sent to: '+toEmail);
       if(callback) callback(true);
     }, function(err){
-      console.log('📧 Email failed:', err);
+      console.log('📧 ❌ Email failed:', err);
+      showToast('📧 فشل إرسال البريد: '+toEmail,'#DC2626');
       if(callback) callback(false);
     });
   } catch(e) {
@@ -1069,9 +1096,15 @@ function sendEmailNotification(toEmail, subject, bodyHtml, callback) {
 function notifyRole(role, subject, bodyHtml) {
   var targets = members.filter(function(m){return m.role===role && m.email});
   console.log('📧 Notifying '+role+'s: found '+targets.length+' targets', targets.map(function(m){return m.name+' ('+m.email+')'}));
-  if(targets.length===0) { console.warn('📧 No '+role+'s found — email not sent!'); showToast('⚠️ لا يوجد '+({supervisor:'مشرف',admin:'مدير'}[role]||role)+' مسجل لاستلام الإشعار','#D97706'); }
+  if(targets.length===0) { console.warn('📧 No '+role+'s found — email not sent!'); showToast('⚠️ لا يوجد '+({supervisor:'مشرف',admin:'مدير'}[role]||role)+' مسجل لاستلام الإشعار','#D97706'); return; }
+  var sent = 0;
   targets.forEach(function(m){
-    sendEmailNotification(m.email, subject, bodyHtml);
+    sendEmailNotification(m.email, subject, bodyHtml, function(ok) {
+      sent++;
+      if(sent === targets.length) {
+        showToast('📧 تم إرسال الإشعار بالبريد الإلكتروني ('+targets.length+')','#2563EB');
+      }
+    });
   });
 }
 
@@ -4246,7 +4279,6 @@ function closeBug(id) {
 // INIT & SESSION PERSISTENCE
 // ═══════════════════════════════════════════════════════════════
 function saveSession() {
-  if(!_fbReady) return;
   try {
     // Save to localStorage as cache
     if(currentUser) localStorage.setItem('fintech_session', JSON.stringify(currentUser));
