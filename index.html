@@ -2136,9 +2136,15 @@ function confirmDeleteTask(id) {
 function showEditTaskModal(id) {
   var t = tasks.find(function(x){return x.id===id});
   if(!t) return;
+  var memberOptions = members.map(function(m){
+    return '<option value="'+m.id+'" '+(String(t.assignedTo)===String(m.id)?'selected':'')+'>'+m.name+'</option>';
+  }).join('');
   showModal('✏️ تعديل المهمة', 
     '<div class="form-group"><label class="form-label">عنوان المهمة</label><input class="form-input" id="editTaskTitle" value="'+t.title+'"></div>' +
     '<div class="form-group"><label class="form-label">الوصف</label><textarea class="form-textarea" id="editTaskDesc">'+( t.desc||'')+'</textarea></div>' +
+    '<div class="form-group"><label class="form-label">المسؤول</label><select class="form-select" id="editTaskAssignee">' +
+      '<option value="">غير محدد</option>' + memberOptions +
+    '</select></div>' +
     '<div class="form-group"><label class="form-label">الأولوية</label><select class="form-select" id="editTaskPriority">' +
       '<option value="low" '+(t.priority==='low'?'selected':'')+'>🟢 منخفضة</option>' +
       '<option value="medium" '+(t.priority==='medium'?'selected':'')+'>🟡 متوسطة</option>' +
@@ -2158,10 +2164,12 @@ function showEditTaskModal(id) {
 function saveEditTask(id) {
   var title = document.getElementById('editTaskTitle').value.trim();
   if(!title) { showToast('⚠️ يرجى إدخال عنوان المهمة','#DC2626'); return; }
+  var assignee = document.getElementById('editTaskAssignee').value;
   tasks = tasks.map(function(t) {
     if(t.id===id) return Object.assign({}, t, {
       title: title,
       desc: document.getElementById('editTaskDesc').value.trim(),
+      assignedTo: assignee ? parseInt(assignee)||assignee : t.assignedTo,
       priority: document.getElementById('editTaskPriority').value,
       status: document.getElementById('editTaskStatus').value,
       progress: parseInt(document.getElementById('editTaskProgress').value)||0,
