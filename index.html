@@ -1320,7 +1320,7 @@ function getSortedMembers(filterRole) {
   }
   return list;
 }
-const isHR = () => currentUser.dept === 5 || currentUser.role === 'admin';
+const isHR = () => currentUser.dept === 6 || currentUser.role === 'admin';
 const badge = (text, color, bg) => `<span class="badge" style="background:${bg||color+'18'};color:${color}">${text}</span>`;
 const today = () => new Date().toISOString().slice(0,10);
 const pendingCount = () => approvals.filter(a => a.status === 'pending').length;
@@ -1692,7 +1692,7 @@ function navigate(page) {
   if(currentUser.role==='supervisor' && ['tasks','teams','timeline','companies','structure','warnings'].indexOf(page)!==-1) {
     page = 'dashboard';
   }
-  if(currentUser.role==='member' && ['warnings','structure'].indexOf(page)!==-1 && currentUser.dept!=5) {
+  if(currentUser.role==='member' && ['warnings','structure'].indexOf(page)!==-1 && currentUser.dept!=6) {
     page = 'dashboard';
   }
   if(currentPage && currentPage !== page) navHistory.push(currentPage);
@@ -1747,7 +1747,7 @@ function closeModal(e) { if(e.target === $('modalOverlay')) hideModal(); }
 // ═══════════════════════════════════════════════════════════════
 function renderDashboard() {
   if(currentUser.role==='supervisor') { renderSupervisorDashboard(); return; }
-  const myTasks = (currentUser.role==='member' && currentUser.dept!=5) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
+  const myTasks = (currentUser.role==='member' && currentUser.dept!=6) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
   const total=myTasks.length, completed=myTasks.filter(t=>t.status==='completed').length;
   const inProg=myTasks.filter(t=>t.status==='in_progress').length, delayed=myTasks.filter(t=>t.status==='delayed').length;
   const notStarted=myTasks.filter(t=>t.status==='not_started').length;
@@ -2079,7 +2079,7 @@ function renderSupervisorDashboard() {
 let taskFilter = 'all', taskDeptFilter = 'all';
 
 function renderTasks() {
-  let myTasks = (currentUser.role==='member' && currentUser.dept!=5) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
+  let myTasks = (currentUser.role==='member' && currentUser.dept!=6) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
   let filtered = myTasks.filter(t => {
     if(taskFilter!=='all' && t.status!==taskFilter) return false;
     if(taskDeptFilter!=='all' && t.dept!==parseInt(taskDeptFilter)) return false;
@@ -2905,10 +2905,13 @@ function renderTeams() {
         const team=getTeam(m.teamId);
         const mt=tasks.filter(t=>String(t.assignedTo)===String(m.id));
         const done=mt.filter(t=>t.status==='completed').length;
+        const roleColor = m.role==='admin'?'var(--gold)':m.role==='supervisor'?'var(--blue)':'var(--slate-500)';
+        const roleLabel = m.role==='admin'?'مدير':m.role==='supervisor'?'مشرف':'عضو';
+        const canChangeRole = currentUser.role==='admin' && String(m.id)!==String(currentUser.id);
         return `<div class="member-card">
           <div class="member-avatar" style="background:linear-gradient(135deg,var(--gold),var(--gold-dark))">${m.name.charAt(0)}</div>
           <div style="flex:1"><div style="font-weight:700;font-size:13px">${m.name}</div><div style="font-size:11px;color:var(--slate-400)">${(team&&team.name)||'غير محدد'}</div>
-          <div style="display:flex;gap:6px;margin-top:6px">${badge(mt.length+' مهمة','#2563EB')} ${badge(done+' مكتمل','#059669')}</div></div>
+          <div style="display:flex;gap:6px;margin-top:6px">${badge(mt.length+' مهمة','#2563EB')} ${badge(done+' مكتمل','#059669')}${canChangeRole?' <button onclick="event.stopPropagation();showChangeRoleModal('+m.id+')" style="padding:2px 8px;border-radius:6px;border:1px solid '+roleColor+';background:transparent;color:'+roleColor+';font-family:inherit;font-weight:700;font-size:10px;cursor:pointer">'+roleLabel+' ✏️</button>':''}</div></div>
         </div>`;
       }).join('')}</div>
     </div>`;
@@ -2919,10 +2922,12 @@ function renderTeams() {
         const team=getTeam(m.teamId);
         const roleColor = m.role==='admin'?'var(--gold)':m.role==='supervisor'?'var(--blue)':'var(--slate-500)';
         const roleBg = m.role==='admin'?'linear-gradient(135deg,var(--gold),var(--gold-dark))':m.role==='supervisor'?'var(--blue)':'var(--slate-500)';
+        const roleLabel = m.role==='admin'?'مدير':m.role==='supervisor'?'مشرف':'عضو';
+        const canChangeRole = currentUser.role==='admin' && String(m.id)!==String(currentUser.id);
         return `<div class="member-card">
           <div class="member-avatar" style="background:${roleBg}">${m.name.charAt(0)}</div>
           <div style="flex:1"><div style="font-weight:700;font-size:13px">${m.name}</div><div style="font-size:11px;color:var(--slate-400)">${(team&&team.name)||m.title}</div></div>
-          ${badge(m.role==='admin'?'مدير':m.role==='supervisor'?'مشرف':'عضو',roleColor)}
+          ${canChangeRole?'<button onclick="event.stopPropagation();showChangeRoleModal('+m.id+')" style="padding:4px 10px;border-radius:8px;border:1.5px solid '+roleColor+';background:'+roleColor+'12;color:'+roleColor+';font-family:inherit;font-weight:700;font-size:11px;cursor:pointer;transition:all 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">'+roleLabel+' ✏️</button>':badge(roleLabel,roleColor)}
         </div>`;
       }).join('')}</div>
     </div>`;
@@ -2968,6 +2973,79 @@ function addMember() {
   const team=getTeam(teamId);
   members.push({id:Date.now(),name,email,role:'member',teamId,dept:(team&&team.dept?team.dept.id:null),title:'عضو'});
   hideModal(); renderTeams();
+}
+
+function showChangeRoleModal(memberId) {
+  var m = getMember(memberId);
+  if(!m) return;
+  var teamOpts = DEPARTMENTS.flatMap(function(d){return d.teams.map(function(t){return {id:t.id,label:d.icon+' '+t.name,deptId:d.id}})});
+  var roles = [
+    {id:'admin',label:'مدير',icon:'👑',color:'var(--gold)',bg:'#FEF3C7',desc:'صلاحيات كاملة — إدارة النظام والأعضاء والمهام'},
+    {id:'supervisor',label:'مشرف',icon:'🎓',color:'var(--blue)',bg:'#EFF6FF',desc:'مشرف جامعي — عرض التقارير والموافقات فقط'},
+    {id:'member',label:'عضو',icon:'👤',color:'var(--slate-500)',bg:'#F1F5F9',desc:'عضو فريق — تنفيذ المهام ورفع التقارير'}
+  ];
+  var teamSelectHtml = '<div class="form-group" id="roleTeamGroup" style="display:'+(m.role==='member'?'block':'none')+'"><label class="form-label">الفريق</label><select class="form-select" id="changeRoleTeam"><option value="">اختر الفريق...</option>'+teamOpts.map(function(t){return '<option value="'+t.id+'" '+(m.teamId==t.id?'selected':'')+'>'+t.label+'</option>'}).join('')+'</select></div>';
+  showModal('🔄 تغيير صلاحية — ' + m.name,
+    '<div style="margin-bottom:16px;padding:14px;background:var(--slate-50);border-radius:12px;text-align:center">' +
+    '<div style="font-size:13px;color:var(--slate-500)">الصلاحية الحالية</div>' +
+    '<div style="font-size:18px;font-weight:800;margin-top:4px">' + (m.role==='admin'?'👑 مدير':m.role==='supervisor'?'🎓 مشرف':'👤 عضو') + '</div></div>' +
+    '<div class="form-group"><label class="form-label">الصلاحية الجديدة</label>' +
+    '<div style="display:flex;flex-direction:column;gap:8px">' +
+    roles.map(function(r) {
+      return '<div onclick="selectNewRole(\''+r.id+'\')" id="roleOpt_'+r.id+'" style="padding:14px;border-radius:12px;border:2px solid '+(m.role===r.id?r.color:'var(--slate-200)')+';background:'+(m.role===r.id?r.bg:'#fff')+';cursor:pointer;transition:all 0.2s">' +
+        '<div style="display:flex;align-items:center;gap:10px">' +
+        '<span style="font-size:22px">'+r.icon+'</span>' +
+        '<div><div style="font-weight:800;font-size:14px;color:'+r.color+'">'+r.label+'</div>' +
+        '<div style="font-size:11px;color:var(--slate-400);margin-top:2px">'+r.desc+'</div></div></div></div>';
+    }).join('') +
+    '<input type="hidden" id="newRoleValue" value="'+m.role+'">' +
+    '</div></div>' +
+    teamSelectHtml +
+    '<button class="btn btn-primary btn-lg btn-block" onclick="changeRole('+memberId+')">💾 حفظ التغيير</button>');
+}
+
+function selectNewRole(role) {
+  document.getElementById('newRoleValue').value = role;
+  var colors = {admin:'var(--gold)',supervisor:'var(--blue)',member:'var(--slate-500)'};
+  var bgs = {admin:'#FEF3C7',supervisor:'#EFF6FF',member:'#F1F5F9'};
+  ['admin','supervisor','member'].forEach(function(r) {
+    var el = document.getElementById('roleOpt_'+r);
+    if(el) { el.style.borderColor = r===role?colors[r]:'var(--slate-200)'; el.style.background = r===role?bgs[r]:'#fff'; }
+  });
+  var teamGroup = document.getElementById('roleTeamGroup');
+  if(teamGroup) teamGroup.style.display = role==='member'?'block':'none';
+}
+
+function changeRole(memberId) {
+  var newRole = document.getElementById('newRoleValue').value;
+  var teamSelect = document.getElementById('changeRoleTeam');
+  var newTeamId = teamSelect ? parseInt(teamSelect.value)||null : null;
+  var newTeam = newTeamId ? getTeam(newTeamId) : null;
+
+  if(newRole==='member' && !newTeamId) { showToast('⚠️ يرجى اختيار الفريق للعضو','#DC2626'); return; }
+
+  members = members.map(function(m) {
+    if(String(m.id)===String(memberId)) {
+      var updated = Object.assign({}, m, {role: newRole});
+      if(newRole==='admin') {
+        updated.title = 'مدير';
+        updated.teamId = null;
+        updated.dept = null;
+      } else if(newRole==='supervisor') {
+        updated.title = 'مشرف الفعالية';
+        updated.teamId = null;
+        updated.dept = null;
+      } else {
+        updated.title = 'عضو';
+        updated.teamId = newTeamId;
+        updated.dept = newTeam ? newTeam.dept.id : null;
+      }
+      return updated;
+    }
+    return m;
+  });
+  hideModal(); saveSession(); renderTeams();
+  showToast('✅ تم تغيير الصلاحية بنجاح','#059669');
 }
 
 // ═══════════════════════════════════════════════════════════════
