@@ -830,28 +830,35 @@ function uploadToStorage(fileObj, folder) {
   }
   var fileId = folder + '_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
   var data = fileObj.data;
-  var chunkSize = 900000;
+  var chunkSize = 950000;
   var totalChunks = Math.ceil(data.length / chunkSize);
-  console.log('📁 Saving', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+Math.round(data.length/1024)+'KB)');
+  var sizeMB = (data.length / 1024 / 1024).toFixed(1);
+  console.log('📁 Saving', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+sizeMB+'MB)');
 
-  // Store file metadata + chunks in settings collection (known to work)
   var meta = {name:fileObj.name, size:fileObj.size, type:fileObj.type, tc:totalChunks, ts:Date.now()};
-  var promises = [db.collection('settings').doc('file_'+fileId+'_meta').set(meta)];
-  
-  for(var i=0; i<totalChunks; i++) {
+
+  // Upload chunks sequentially to avoid overwhelming Firestore
+  function uploadChunk(i) {
+    if(i >= totalChunks) return Promise.resolve();
     var chunk = data.substring(i * chunkSize, (i+1) * chunkSize);
-    promises.push(db.collection('settings').doc('file_'+fileId+'_c'+i).set({d:chunk}));
+    return db.collection('settings').doc('file_'+fileId+'_c'+i).set({d:chunk}).then(function() {
+      var pct = Math.round((i+1)/totalChunks*100);
+      showToast('⏳ جاري رفع الملف... '+pct+'%','var(--blue)');
+      return uploadChunk(i + 1);
+    });
   }
 
-  return Promise.all(promises).then(function() {
-    console.log('📁 ✅ Saved:', fileObj.name, 'fileId='+fileId);
-    showToast('📁 ✅ تم حفظ الملف: '+fileObj.name,'#059669');
-    return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId};
-  }).catch(function(err) {
-    console.error('📁 ❌ Save failed:', err);
-    showToast('📁 ❌ فشل حفظ الملف: '+(err.message||err),'#DC2626');
-    return fileObj;
-  });
+  return db.collection('settings').doc('file_'+fileId+'_meta').set(meta)
+    .then(function() { return uploadChunk(0); })
+    .then(function() {
+      console.log('📁 ✅ Saved:', fileObj.name, 'fileId='+fileId);
+      showToast('📁 ✅ تم رفع الملف: '+fileObj.name,'#059669');
+      return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId};
+    }).catch(function(err) {
+      console.error('📁 ❌ Upload failed:', err);
+      showToast('❌ فشل رفع الملف — حاول مرة أخرى','#DC2626');
+      throw err;
+    });
 }
 
 function uploadImagesToStorage(images) {
@@ -2658,17 +2665,17 @@ function addReport(status) {
       result.data = localFile.data;
       if(localImages && localImages.length) {
         uploadImagesToStorage(localImages).then(function(imgResults) {
-          // Keep image data too
           imgResults.forEach(function(ir, idx) { if(localImages[idx] && localImages[idx].data) ir.data = localImages[idx].data; });
           doSave(result, imgResults);
-        }).catch(function(e) { doSave(result, null); });
+        }).catch(function(e) { console.error('Image upload err:', e); doSave(result, localImages); });
       } else {
         doSave(result, null);
       }
     }).catch(function(e) {
       console.error('Report file save error:', e);
-      // Save with data only (no fileId) — works locally
-      doSave(localFile, null);
+      // Still save report without cloud file
+      localFile.fileId = null;
+      doSave(localFile, localImages);
     });
   } else if(localImages && localImages.length) {
     showToast('⏳ جاري حفظ الصور...','var(--blue)');
