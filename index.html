@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -507,6 +506,8 @@ body {
 <script>
 // Global error handler — shows errors on mobile
 window.onerror = function(msg, url, line, col, err) {
+  // Ignore generic CORS errors from external scripts (Firebase, EmailJS)
+  if(msg==='Script error.' || line===0) return;
   console.error('❌ ERROR:', msg, 'line:', line);
   var d = document.getElementById('_appError');
   if(!d) {
@@ -546,7 +547,10 @@ window.onerror = function(msg, url, line, col, err) {
       </div>
       <div id="loginError" class="form-error" style="display:none"></div>
       <button class="btn btn-primary btn-lg btn-block" onclick="handleLogin()">تسجيل الدخول</button>
-      <div style="text-align:center;margin-top:14px">
+      <div style="text-align:center;margin-top:10px">
+        <button style="background:none;border:none;color:var(--blue);font-weight:600;font-size:12px;cursor:pointer;font-family:inherit" onclick="forgotPassword()">🔑 نسيت كلمة المرور؟</button>
+      </div>
+      <div style="text-align:center;margin-top:8px">
         <span style="font-size:12px;color:var(--slate-400)">ما عندك حساب؟</span>
         <button style="background:none;border:none;color:var(--gold);font-weight:700;font-size:12px;cursor:pointer;font-family:inherit" onclick="switchLoginTab('register')">سجّل الآن</button>
       </div>
@@ -805,78 +809,84 @@ function cleanForDb(obj) {
 // ═══════════════════════════════════════
 // FIREBASE STORAGE — Cloud File Storage
 // ═══════════════════════════════════════
-// FILE STORAGE — Uses Firestore settings collection (proven working)
+// FILE STORAGE — Firestore chunks for cross-device access
 // ═══════════════════════════════════════
 
-// Local file cache (survives page refresh)
 function cacheFileLocally(key, fileData) {
-  try { localStorage.setItem('fc_'+key, fileData); } catch(e) { console.warn('Cache full, clearing old files'); clearOldFileCache(); try { localStorage.setItem('fc_'+key, fileData); } catch(e2){} }
+  try { localStorage.setItem('fc_'+key, fileData); } catch(e) { clearOldFileCache(); try { localStorage.setItem('fc_'+key, fileData); } catch(e2){} }
 }
 function getCachedFile(key) {
   try { return localStorage.getItem('fc_'+key); } catch(e) { return null; }
 }
 function clearOldFileCache() {
   var keys = [];
-  for(var i=0; i<localStorage.length; i++) { var k=localStorage.key(i); if(k.startsWith('fc_')) keys.push(k); }
+  for(var i=0; i<localStorage.length; i++) { var k=localStorage.key(i); if(k && k.startsWith('fc_')) keys.push(k); }
   keys.slice(0, Math.floor(keys.length/2)).forEach(function(k){ localStorage.removeItem(k); });
 }
 
 function uploadToStorage(fileObj, folder) {
   if(!_firebaseAvailable || !db || !fileObj || !fileObj.data) {
-    console.warn('📁 Cannot save: fb='+_firebaseAvailable+' db='+!!db+' file='+!!fileObj);
-    return Promise.resolve(fileObj);
+    console.warn('📁 Cannot save to cloud');
+    return Promise.resolve(null);
   }
   var fileId = folder + '_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
   var data = fileObj.data;
-  var chunkSize = 700000;
+  var chunkSize = 800000; // ~800KB safe under 1MB Firestore limit
   var totalChunks = Math.ceil(data.length / chunkSize);
-  console.log('📁 Saving', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+Math.round(data.length/1024)+'KB)');
+  console.log('📁 Uploading', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+Math.round(data.length/1024)+'KB)');
 
-  // Store file metadata + chunks in settings collection (known to work)
-  var meta = {name:fileObj.name, size:fileObj.size, type:fileObj.type, tc:totalChunks, ts:Date.now()};
-  var promises = [db.collection('settings').doc('file_'+fileId+'_meta').set(meta)];
-  
+  var batch = db.batch();
+  // Meta document
+  batch.set(db.collection('files').doc(fileId), {
+    name: fileObj.name, size: fileObj.size, type: fileObj.type,
+    chunks: totalChunks, created: Date.now(), folder: folder
+  });
+  // Chunk documents
   for(var i=0; i<totalChunks; i++) {
-    var chunk = data.substring(i * chunkSize, (i+1) * chunkSize);
-    promises.push(db.collection('settings').doc('file_'+fileId+'_c'+i).set({d:chunk}));
+    batch.set(db.collection('files').doc(fileId+'_c'+i), {
+      d: data.substring(i * chunkSize, (i+1) * chunkSize)
+    });
   }
 
-  return Promise.all(promises).then(function() {
-    console.log('📁 ✅ Saved:', fileObj.name, 'fileId='+fileId);
-    showToast('📁 ✅ تم حفظ الملف: '+fileObj.name,'#059669');
+  return batch.commit().then(function() {
+    console.log('📁 ✅ Cloud saved:', fileObj.name, 'fileId='+fileId);
     return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId};
   }).catch(function(err) {
-    console.error('📁 ❌ Save failed:', err);
-    showToast('📁 ❌ فشل حفظ الملف: '+(err.message||err),'#DC2626');
-    return fileObj;
+    console.error('📁 ❌ Cloud save failed:', err.code, err.message);
+    // Show specific error to user
+    if(err.code === 'permission-denied') {
+      showToast('⚠️ يرجى تحديث قواعد Firestore — راجع التعليمات','#DC2626');
+    } else {
+      showToast('⚠️ فشل الرفع للسحابة: '+(err.message||err),'#DC2626');
+    }
+    return null;
   });
 }
 
 function uploadImagesToStorage(images) {
-  if(!_firebaseAvailable || !db || !images || !images.length) return Promise.resolve(images||[]);
+  if(!_firebaseAvailable || !db || !images || !images.length) return Promise.resolve([]);
   return Promise.all(images.map(function(img) {
     if(img.fileId) return Promise.resolve(img);
     return uploadToStorage(img, 'img');
   }));
 }
 
-// Load file from Firestore settings
 function loadFileFromDb(fileId) {
   if(!fileId || !db) return Promise.resolve(null);
-  return db.collection('settings').doc('file_'+fileId+'_meta').get().then(function(metaSnap) {
-    if(!metaSnap.exists) { console.warn('📁 No meta found for', fileId); return null; }
+  return db.collection('files').doc(fileId).get().then(function(metaSnap) {
+    if(!metaSnap.exists) { console.warn('📁 No meta for', fileId); return null; }
     var meta = metaSnap.data();
-    var chunkPromises = [];
-    for(var i=0; i<meta.tc; i++) {
-      chunkPromises.push(db.collection('settings').doc('file_'+fileId+'_c'+i).get());
+    var promises = [];
+    for(var i=0; i<meta.chunks; i++) {
+      promises.push(db.collection('files').doc(fileId+'_c'+i).get());
     }
-    return Promise.all(chunkPromises).then(function(snaps) {
-      var data = '';
+    return Promise.all(promises).then(function(snaps) {
+      var joined = '';
       for(var i=0; i<snaps.length; i++) {
-        if(!snaps[i].exists) { console.warn('📁 Missing chunk', i); return null; }
-        data += snaps[i].data().d;
+        if(!snaps[i].exists) return null;
+        joined += snaps[i].data().d;
       }
-      return {name:meta.name, size:meta.size, type:meta.type, fileId:fileId, data:data};
+      return {name:meta.name, size:meta.size, type:meta.type, fileId:fileId, data:joined};
     });
   }).catch(function(e) { console.error('📁 Load error:', e); return null; });
 }
@@ -1368,6 +1378,41 @@ function filterRegTeams() {
       });
     }
   }
+}
+
+function forgotPassword() {
+  var email = ($('loginEmail')||{}).value||'';
+  if(!email || !email.includes('@')) {
+    showModal('🔑 استعادة كلمة المرور',
+      '<div class="form-group"><label class="form-label">أدخل بريدك الإلكتروني</label><input class="form-input" id="resetEmail" placeholder="example@fintech.sa" value="'+email+'"></div>' +
+      '<button class="btn btn-primary btn-lg btn-block" onclick="sendResetEmail()">📧 إرسال رابط الاستعادة</button>');
+    return;
+  }
+  sendResetEmail(email);
+}
+
+function sendResetEmail(emailParam) {
+  var email = emailParam || (document.getElementById('resetEmail')||{}).value||'';
+  if(!email || !email.includes('@')) { showToast('⚠️ يرجى إدخال بريد إلكتروني صحيح','#DC2626'); return; }
+  if(!auth) { showToast('⚠️ خدمة المصادقة غير متاحة','#DC2626'); return; }
+  showToast('⏳ جاري إرسال رابط الاستعادة...','var(--blue)');
+  auth.sendPasswordResetEmail(email).then(function() {
+    hideModal();
+    showToast('✅ تم إرسال رابط استعادة كلمة المرور إلى: '+email,'#059669');
+    showModal('📧 تم الإرسال',
+      '<div style="text-align:center;padding:20px">' +
+      '<div style="font-size:56px;margin-bottom:14px">📧</div>' +
+      '<div style="font-weight:800;font-size:16px;margin-bottom:10px">تم إرسال رابط الاستعادة</div>' +
+      '<div style="font-size:13px;color:var(--slate-500);line-height:1.8;margin-bottom:16px">تم إرسال رابط استعادة كلمة المرور إلى<br><strong style="color:var(--navy)">'+email+'</strong><br>تفقد بريدك الإلكتروني (وبريد السبام)</div>' +
+      '<button class="btn btn-primary btn-lg btn-block" onclick="hideModal()">حسناً</button></div>');
+  }).catch(function(err) {
+    console.error('Reset password error:', err);
+    var msg = 'حدث خطأ — حاول مرة أخرى';
+    if(err.code==='auth/user-not-found') msg = 'البريد الإلكتروني غير مسجّل';
+    if(err.code==='auth/invalid-email') msg = 'البريد الإلكتروني غير صحيح';
+    if(err.code==='auth/too-many-requests') msg = 'طلبات كثيرة — انتظر قليلاً';
+    showToast('❌ '+msg,'#DC2626');
+  });
 }
 
 function handleLogin() {
@@ -2552,34 +2597,19 @@ function addReport(status) {
     }
   }
 
-  // Upload file first, then save with BOTH data (for current session) and fileId (for sync)
+  // Save immediately with file data (works on this device)
+  doSave(localFile, localImages);
+
+  // Upload files to Firestore for OTHER devices
   if(localFile && localFile.data) {
-    showToast('⏳ جاري حفظ الملف...','var(--blue)');
+    showToast('☁️ جاري رفع الملف للسحابة...','var(--blue)');
     uploadToStorage(localFile, 'reports').then(function(result) {
-      // KEEP data in memory so file opens immediately
-      result.data = localFile.data;
-      if(localImages && localImages.length) {
-        uploadImagesToStorage(localImages).then(function(imgResults) {
-          // Keep image data too
-          imgResults.forEach(function(ir, idx) { if(localImages[idx] && localImages[idx].data) ir.data = localImages[idx].data; });
-          doSave(result, imgResults);
-        }).catch(function(e) { doSave(result, null); });
-      } else {
-        doSave(result, null);
+      if(result && result.fileId) {
+        var rpt = reports.find(function(r){return r.title===title && r.date===today()});
+        if(rpt && rpt.file) { rpt.file.fileId = result.fileId; saveSession(); }
+        showToast('☁️ ✅ الملف متاح الآن لجميع الأجهزة','#059669');
       }
-    }).catch(function(e) {
-      console.error('Report file save error:', e);
-      // Save with data only (no fileId) — works locally
-      doSave(localFile, null);
-    });
-  } else if(localImages && localImages.length) {
-    showToast('⏳ جاري حفظ الصور...','var(--blue)');
-    uploadImagesToStorage(localImages).then(function(imgResults) {
-      imgResults.forEach(function(ir, idx) { if(localImages[idx] && localImages[idx].data) ir.data = localImages[idx].data; });
-      doSave(null, imgResults);
-    }).catch(function(e) { doSave(null, null); });
-  } else {
-    doSave(null, null);
+    }).catch(function(e){ console.warn('Cloud upload failed:', e); });
   }
 }
 
@@ -2702,14 +2732,10 @@ function handleApproval(id, action) {
     }
   }
 
+  doSave(localResponseFile);
+  // Upload response file to cloud
   if(localResponseFile && localResponseFile.data) {
-    showToast('⏳ جاري حفظ الملف...','var(--blue)');
-    uploadToStorage(localResponseFile, 'responses').then(function(result) {
-      result.data = localResponseFile.data;
-      doSave(result);
-    }).catch(function(e) { doSave(localResponseFile); });
-  } else {
-    doSave(null);
+    uploadToStorage(localResponseFile, 'responses').catch(function(e){ console.warn('Cloud upload:', e); });
   }
 }
 
@@ -2775,17 +2801,18 @@ function addApproval() {
       urgColor));
   }
 
+  // Save directly
+  doSave(localFile);
+  // Upload to cloud for other devices
   if(localFile && localFile.data) {
-    showToast('⏳ جاري حفظ الملف...','var(--blue)');
+    showToast('☁️ جاري رفع الملف للسحابة...','var(--blue)');
     uploadToStorage(localFile, 'approvals').then(function(result) {
-      result.data = localFile.data;
-      doSave(result);
-    }).catch(function(e) {
-      console.error('File save error:', e);
-      doSave(localFile);
-    });
-  } else {
-    doSave(null);
+      if(result && result.fileId) {
+        var ap = approvals.find(function(a){return a.title===title && a.date===today()});
+        if(ap && ap.file) { ap.file.fileId = result.fileId; saveSession(); }
+        showToast('☁️ ✅ الملف متاح لجميع الأجهزة','#059669');
+      }
+    }).catch(function(e){ console.warn('Cloud upload failed:', e); });
   }
 }
 
@@ -3311,9 +3338,9 @@ function openResponseFile(id) {
 let approvalFile = null;
 
 function handleApprovalFile(input) {
-  const file = input.files[0];
+  var file = input.files[0];
   if(!file) return;
-  const ext = file.name.split('.').pop().toLowerCase();
+  var ext = file.name.split('.').pop().toLowerCase();
   if(!['pdf','doc','docx'].includes(ext)) {
     showToast('⚠️ يرجى رفع ملف PDF أو Word فقط','#DC2626');
     input.value = '';
@@ -3324,15 +3351,20 @@ function handleApprovalFile(input) {
     input.value = '';
     return;
   }
-  const reader = new FileReader();
+  showToast('⏳ جاري قراءة الملف...','var(--blue)');
+  var reader = new FileReader();
   reader.onload = function(e) {
     approvalFile = {name: file.name, size: (file.size/1024).toFixed(1)+'KB', type: ext, data: e.target.result};
-    document.getElementById('approvalFileZone').style.borderColor = 'var(--green)';
-    document.getElementById('approvalFileZone').style.background = '#ECFDF5';
-    const nameDiv = document.getElementById('approvalFileName');
-    nameDiv.style.display = 'block';
-    nameDiv.innerHTML = '📄 '+file.name+' <span style="color:var(--slate-400);font-weight:400">('+approvalFile.size+')</span> <button onclick="removeApprovalFile(event)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;margin-right:8px">✕</button>';
+    var zone = document.getElementById('approvalFileZone');
+    if(zone) { zone.style.borderColor = 'var(--green)'; zone.style.background = '#ECFDF5'; }
+    var nameDiv = document.getElementById('approvalFileName');
+    if(nameDiv) {
+      nameDiv.style.display = 'block';
+      nameDiv.innerHTML = '📄 '+file.name+' <span style="color:var(--slate-400);font-weight:400">('+approvalFile.size+')</span> <button onclick="removeApprovalFile(event)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;margin-right:8px">✕</button>';
+    }
+    showToast('✅ تم تحميل الملف: '+file.name,'#059669');
   };
+  reader.onerror = function() { showToast('❌ فشل قراءة الملف','#DC2626'); };
   reader.readAsDataURL(file);
 }
 
@@ -3352,9 +3384,9 @@ let reportFile = null;
 var reportImages = [];
 
 function handleReportFile(input) {
-  const file = input.files[0];
+  var file = input.files[0];
   if(!file) return;
-  const ext = file.name.split('.').pop().toLowerCase();
+  var ext = file.name.split('.').pop().toLowerCase();
   if(!['pdf','doc','docx'].includes(ext)) {
     showToast('⚠️ يرجى رفع ملف PDF أو Word فقط','#DC2626');
     input.value = '';
@@ -3365,15 +3397,22 @@ function handleReportFile(input) {
     input.value = '';
     return;
   }
-  const reader = new FileReader();
+  showToast('⏳ جاري قراءة الملف...','var(--blue)');
+  var reader = new FileReader();
   reader.onload = function(e) {
     reportFile = {name: file.name, size: (file.size/1024).toFixed(1)+'KB', type: ext, data: e.target.result};
-    const zone = document.getElementById('reportFileZone');
-    zone.style.borderColor = 'var(--green)';
-    zone.style.background = '#ECFDF5';
-    const nameDiv = document.getElementById('reportFileName');
-    nameDiv.style.display = 'block';
-    nameDiv.innerHTML = '📄 '+file.name+' <span style="color:var(--slate-400);font-weight:400">('+reportFile.size+')</span> <button onclick="removeReportFile(event)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;margin-right:8px">✕</button>';
+    var zone = document.getElementById('reportFileZone');
+    if(zone) { zone.style.borderColor = 'var(--green)'; zone.style.background = '#ECFDF5'; }
+    var nameDiv = document.getElementById('reportFileName');
+    if(nameDiv) {
+      nameDiv.style.display = 'block';
+      nameDiv.innerHTML = '📄 '+file.name+' <span style="color:var(--slate-400);font-weight:400">('+reportFile.size+')</span> <button onclick="removeReportFile(event)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;margin-right:8px">✕</button>';
+    }
+    showToast('✅ تم تحميل الملف: '+file.name,'#059669');
+  };
+  reader.onerror = function(e) {
+    console.error('FileReader error:', e);
+    showToast('❌ فشل قراءة الملف — جرب ملف أصغر','#DC2626');
   };
   reader.readAsDataURL(file);
 }
@@ -4434,7 +4473,6 @@ function closeBug(id) {
 // ═══════════════════════════════════════════════════════════════
 function saveSession() {
   try {
-    // Save to localStorage as cache
     if(currentUser) localStorage.setItem('fintech_session', JSON.stringify(currentUser));
     localStorage.setItem('fintech_tasks', JSON.stringify(tasks));
     localStorage.setItem('fintech_members', JSON.stringify(members));
@@ -4442,10 +4480,26 @@ function saveSession() {
     localStorage.setItem('fintech_warnings', JSON.stringify(warnings));
     localStorage.setItem('fintech_bugs', JSON.stringify(bugReports));
     try {
-      localStorage.setItem('fintech_reports', JSON.stringify(reports));
-      localStorage.setItem('fintech_approvals', JSON.stringify(approvals));
-    } catch(e) {}
-  } catch(e) {}
+      // Strip large base64 data before saving to localStorage (5MB limit on mobile!)
+      var liteReports = reports.map(function(r) {
+        var c = Object.assign({}, r);
+        if(c.file && c.file.data) c.file = {name:c.file.name, size:c.file.size, type:c.file.type, fileId:c.file.fileId||null, hasLocal:true};
+        if(c.images) c.images = c.images.map(function(img) {
+          if(img && img.data) return {name:img.name, size:img.size, fileId:img.fileId||null, hasLocal:true};
+          return img;
+        });
+        return c;
+      });
+      var liteApprovals = approvals.map(function(a) {
+        var c = Object.assign({}, a);
+        if(c.file && c.file.data) c.file = {name:c.file.name, size:c.file.size, type:c.file.type, fileId:c.file.fileId||null, hasLocal:true};
+        if(c.responseFile && c.responseFile.data) c.responseFile = {name:c.responseFile.name, size:c.responseFile.size, type:c.responseFile.type, fileId:c.responseFile.fileId||null, hasLocal:true};
+        return c;
+      });
+      localStorage.setItem('fintech_reports', JSON.stringify(liteReports));
+      localStorage.setItem('fintech_approvals', JSON.stringify(liteApprovals));
+    } catch(e) { console.warn('localStorage reports/approvals save failed:', e); }
+  } catch(e) { console.warn('localStorage save failed:', e); }
 
   // Save to Firebase (async)
   _suppressSync = true;
