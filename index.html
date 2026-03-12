@@ -544,10 +544,9 @@ window.onerror = function(msg, url, line, col, err) {
         <input class="form-input" id="loginPass" type="password" placeholder="••••••••">
       </div>
       <div id="loginError" class="form-error" style="display:none"></div>
-      <div id="loginResetSuccess" style="display:none;background:#ECFDF5;color:#059669;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600;text-align:center;margin-bottom:12px"></div>
       <button class="btn btn-primary btn-lg btn-block" onclick="handleLogin()">تسجيل الدخول</button>
       <div style="text-align:center;margin-top:10px">
-        <button style="background:none;border:none;color:var(--blue);font-weight:600;font-size:12px;cursor:pointer;font-family:inherit;text-decoration:underline" onclick="showForgotPassword()">نسيت كلمة المرور؟</button>
+        <button style="background:none;border:none;color:var(--blue);font-weight:600;font-size:12px;cursor:pointer;font-family:inherit" onclick="forgotPassword()">🔑 نسيت كلمة المرور؟</button>
       </div>
       <div style="text-align:center;margin-top:8px">
         <span style="font-size:12px;color:var(--slate-400)">ما عندك حساب؟</span>
@@ -1446,51 +1445,38 @@ function handleLogin() {
   });
 }
 
-function showForgotPassword() {
-  var email = $('loginEmail').value.trim();
-  showModal('🔑 نسيت كلمة المرور',
-    '<div style="text-align:center;margin-bottom:16px"><div style="font-size:48px;margin-bottom:10px">📧</div><p style="font-size:13px;color:var(--slate-500);line-height:1.8">أدخل بريدك الإلكتروني وسنرسل لك رابط لإعادة تعيين كلمة المرور</p></div>' +
-    '<div class="form-group"><label class="form-label">البريد الإلكتروني</label><input class="form-input" id="resetEmail" value="'+(email||'')+'" placeholder="example@fintech.sa" type="email"></div>' +
-    '<div id="resetError" class="form-error" style="display:none"></div>' +
-    '<div id="resetSuccess" style="display:none;background:#ECFDF5;color:#059669;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600;text-align:center;margin-bottom:12px"></div>' +
-    '<button class="btn btn-primary btn-lg btn-block" id="resetBtn" onclick="handleForgotPassword()">📧 إرسال رابط إعادة التعيين</button>' +
-    '<button class="btn btn-secondary btn-lg btn-block" style="margin-top:8px" onclick="hideModal()">رجوع لتسجيل الدخول</button>');
-}
-
-function handleForgotPassword() {
-  var email = document.getElementById('resetEmail').value.trim();
-  var errEl = document.getElementById('resetError');
-  var sucEl = document.getElementById('resetSuccess');
-  var btn = document.getElementById('resetBtn');
-  errEl.style.display='none'; sucEl.style.display='none';
-
-  if(!email || !email.includes('@')) { errEl.style.display='block'; errEl.textContent='الرجاء إدخال بريد إلكتروني صحيح'; return; }
-
-  if(!_firebaseAvailable || !auth) {
-    errEl.style.display='block'; errEl.textContent='⚠️ هذه الميزة تتطلب اتصال بالإنترنت وFirebase';
+function forgotPassword() {
+  var email = ($('loginEmail')||{}).value||'';
+  if(!email || !email.includes('@')) {
+    showModal('🔑 استعادة كلمة المرور',
+      '<div class="form-group"><label class="form-label">أدخل بريدك الإلكتروني</label><input class="form-input" id="resetEmail" placeholder="example@fintech.sa" value="'+email+'"></div>' +
+      '<button class="btn btn-primary btn-lg btn-block" onclick="sendResetEmail()">📧 إرسال رابط الاستعادة</button>');
     return;
   }
+  sendResetEmail(email);
+}
 
-  btn.disabled = true; btn.textContent = '⏳ جاري الإرسال...'; btn.style.opacity='0.6';
-
+function sendResetEmail(emailParam) {
+  var email = emailParam || (document.getElementById('resetEmail')||{}).value||'';
+  if(!email || !email.includes('@')) { showToast('⚠️ يرجى إدخال بريد إلكتروني صحيح','#DC2626'); return; }
+  if(!auth) { showToast('⚠️ خدمة المصادقة غير متاحة','#DC2626'); return; }
+  showToast('⏳ جاري إرسال رابط الاستعادة...','var(--blue)');
   auth.sendPasswordResetEmail(email).then(function() {
-    sucEl.style.display='block'; sucEl.textContent='✅ تم إرسال رابط إعادة التعيين إلى بريدك الإلكتروني — تفقّد صندوق الوارد (والسبام)';
-    btn.textContent = '✅ تم الإرسال'; btn.style.background='#059669';
-    setTimeout(function() {
-      hideModal();
-      var loginSuc = document.getElementById('loginResetSuccess');
-      if(loginSuc) { loginSuc.style.display='block'; loginSuc.textContent='📧 تم إرسال رابط إعادة التعيين — تفقّد بريدك الإلكتروني'; }
-    }, 2500);
+    hideModal();
+    showToast('✅ تم إرسال رابط استعادة كلمة المرور إلى: '+email,'#059669');
+    showModal('📧 تم الإرسال',
+      '<div style="text-align:center;padding:20px">' +
+      '<div style="font-size:56px;margin-bottom:14px">📧</div>' +
+      '<div style="font-weight:800;font-size:16px;margin-bottom:10px">تم إرسال رابط الاستعادة</div>' +
+      '<div style="font-size:13px;color:var(--slate-500);line-height:1.8;margin-bottom:16px">تم إرسال رابط استعادة كلمة المرور إلى<br><strong style="color:var(--navy)">'+email+'</strong><br>تفقد بريدك الإلكتروني (وبريد السبام)</div>' +
+      '<button class="btn btn-primary btn-lg btn-block" onclick="hideModal()">حسناً</button></div>');
   }).catch(function(err) {
-    btn.disabled = false; btn.textContent = '📧 إرسال رابط إعادة التعيين'; btn.style.opacity='1';
-    errEl.style.display='block';
-    var msg = 'حدث خطأ أثناء إرسال رابط إعادة التعيين';
-    if(err.code==='auth/user-not-found') msg='هذا البريد غير مسجل في النظام';
-    if(err.code==='auth/invalid-email') msg='البريد الإلكتروني غير صحيح';
-    if(err.code==='auth/too-many-requests') msg='محاولات كثيرة — حاول مرة أخرى بعد دقائق';
-    if(err.code==='auth/network-request-failed') msg='لا يوجد اتصال بالإنترنت';
-    errEl.textContent = msg;
-    console.error('Reset password error:', err.code, err.message);
+    console.error('Reset password error:', err);
+    var msg = 'حدث خطأ — حاول مرة أخرى';
+    if(err.code==='auth/user-not-found') msg = 'البريد الإلكتروني غير مسجّل';
+    if(err.code==='auth/invalid-email') msg = 'البريد الإلكتروني غير صحيح';
+    if(err.code==='auth/too-many-requests') msg = 'طلبات كثيرة — انتظر قليلاً';
+    showToast('❌ '+msg,'#DC2626');
   });
 }
 
