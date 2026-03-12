@@ -506,8 +506,6 @@ body {
 <script>
 // Global error handler — shows errors on mobile
 window.onerror = function(msg, url, line, col, err) {
-  // Ignore generic CORS errors from external scripts (Firebase, EmailJS)
-  if(msg==='Script error.' || line===0) return;
   console.error('❌ ERROR:', msg, 'line:', line);
   var d = document.getElementById('_appError');
   if(!d) {
@@ -546,9 +544,10 @@ window.onerror = function(msg, url, line, col, err) {
         <input class="form-input" id="loginPass" type="password" placeholder="••••••••">
       </div>
       <div id="loginError" class="form-error" style="display:none"></div>
+      <div id="loginResetSuccess" style="display:none;background:#ECFDF5;color:#059669;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600;text-align:center;margin-bottom:12px"></div>
       <button class="btn btn-primary btn-lg btn-block" onclick="handleLogin()">تسجيل الدخول</button>
       <div style="text-align:center;margin-top:10px">
-        <button style="background:none;border:none;color:var(--blue);font-weight:600;font-size:12px;cursor:pointer;font-family:inherit" onclick="forgotPassword()">🔑 نسيت كلمة المرور؟</button>
+        <button style="background:none;border:none;color:var(--blue);font-weight:600;font-size:12px;cursor:pointer;font-family:inherit;text-decoration:underline" onclick="showForgotPassword()">نسيت كلمة المرور؟</button>
       </div>
       <div style="text-align:center;margin-top:8px">
         <span style="font-size:12px;color:var(--slate-400)">ما عندك حساب؟</span>
@@ -809,84 +808,78 @@ function cleanForDb(obj) {
 // ═══════════════════════════════════════
 // FIREBASE STORAGE — Cloud File Storage
 // ═══════════════════════════════════════
-// FILE STORAGE — Firestore chunks for cross-device access
+// FILE STORAGE — Uses Firestore settings collection (proven working)
 // ═══════════════════════════════════════
 
+// Local file cache (survives page refresh)
 function cacheFileLocally(key, fileData) {
-  try { localStorage.setItem('fc_'+key, fileData); } catch(e) { clearOldFileCache(); try { localStorage.setItem('fc_'+key, fileData); } catch(e2){} }
+  try { localStorage.setItem('fc_'+key, fileData); } catch(e) { console.warn('Cache full, clearing old files'); clearOldFileCache(); try { localStorage.setItem('fc_'+key, fileData); } catch(e2){} }
 }
 function getCachedFile(key) {
   try { return localStorage.getItem('fc_'+key); } catch(e) { return null; }
 }
 function clearOldFileCache() {
   var keys = [];
-  for(var i=0; i<localStorage.length; i++) { var k=localStorage.key(i); if(k && k.startsWith('fc_')) keys.push(k); }
+  for(var i=0; i<localStorage.length; i++) { var k=localStorage.key(i); if(k.startsWith('fc_')) keys.push(k); }
   keys.slice(0, Math.floor(keys.length/2)).forEach(function(k){ localStorage.removeItem(k); });
 }
 
 function uploadToStorage(fileObj, folder) {
   if(!_firebaseAvailable || !db || !fileObj || !fileObj.data) {
-    console.warn('📁 Cannot save to cloud');
-    return Promise.resolve(null);
+    console.warn('📁 Cannot save: fb='+_firebaseAvailable+' db='+!!db+' file='+!!fileObj);
+    return Promise.resolve(fileObj);
   }
   var fileId = folder + '_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
   var data = fileObj.data;
-  var chunkSize = 800000; // ~800KB safe under 1MB Firestore limit
+  var chunkSize = 900000;
   var totalChunks = Math.ceil(data.length / chunkSize);
-  console.log('📁 Uploading', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+Math.round(data.length/1024)+'KB)');
+  console.log('📁 Saving', fileObj.name, '→ Firestore ('+totalChunks+' chunks, '+Math.round(data.length/1024)+'KB)');
 
-  var batch = db.batch();
-  // Meta document
-  batch.set(db.collection('files').doc(fileId), {
-    name: fileObj.name, size: fileObj.size, type: fileObj.type,
-    chunks: totalChunks, created: Date.now(), folder: folder
-  });
-  // Chunk documents
+  // Store file metadata + chunks in settings collection (known to work)
+  var meta = {name:fileObj.name, size:fileObj.size, type:fileObj.type, tc:totalChunks, ts:Date.now()};
+  var promises = [db.collection('settings').doc('file_'+fileId+'_meta').set(meta)];
+  
   for(var i=0; i<totalChunks; i++) {
-    batch.set(db.collection('files').doc(fileId+'_c'+i), {
-      d: data.substring(i * chunkSize, (i+1) * chunkSize)
-    });
+    var chunk = data.substring(i * chunkSize, (i+1) * chunkSize);
+    promises.push(db.collection('settings').doc('file_'+fileId+'_c'+i).set({d:chunk}));
   }
 
-  return batch.commit().then(function() {
-    console.log('📁 ✅ Cloud saved:', fileObj.name, 'fileId='+fileId);
+  return Promise.all(promises).then(function() {
+    console.log('📁 ✅ Saved:', fileObj.name, 'fileId='+fileId);
+    showToast('📁 ✅ تم حفظ الملف: '+fileObj.name,'#059669');
     return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId};
   }).catch(function(err) {
-    console.error('📁 ❌ Cloud save failed:', err.code, err.message);
-    // Show specific error to user
-    if(err.code === 'permission-denied') {
-      showToast('⚠️ يرجى تحديث قواعد Firestore — راجع التعليمات','#DC2626');
-    } else {
-      showToast('⚠️ فشل الرفع للسحابة: '+(err.message||err),'#DC2626');
-    }
-    return null;
+    console.error('📁 ❌ Save failed:', err);
+    showToast('📁 ❌ فشل حفظ الملف: '+(err.message||err),'#DC2626');
+    return fileObj;
   });
 }
 
 function uploadImagesToStorage(images) {
-  if(!_firebaseAvailable || !db || !images || !images.length) return Promise.resolve([]);
+  if(!_firebaseAvailable || !db || !images || !images.length) return Promise.resolve(images||[]);
   return Promise.all(images.map(function(img) {
     if(img.fileId) return Promise.resolve(img);
     return uploadToStorage(img, 'img');
   }));
 }
 
+// Load file from Firestore settings
 function loadFileFromDb(fileId) {
   if(!fileId || !db) return Promise.resolve(null);
-  return db.collection('files').doc(fileId).get().then(function(metaSnap) {
-    if(!metaSnap.exists) { console.warn('📁 No meta for', fileId); return null; }
+  return db.collection('settings').doc('file_'+fileId+'_meta').get().then(function(metaSnap) {
+    if(!metaSnap.exists) { console.warn('📁 No meta found for', fileId); return null; }
     var meta = metaSnap.data();
-    var promises = [];
-    for(var i=0; i<meta.chunks; i++) {
-      promises.push(db.collection('files').doc(fileId+'_c'+i).get());
+    var chunkPromises = [];
+    for(var i=0; i<meta.tc; i++) {
+      chunkPromises.push(db.collection('settings').doc('file_'+fileId+'_c'+i).get());
     }
-    return Promise.all(promises).then(function(snaps) {
-      var joined = '';
+    return Promise.all(chunkPromises).then(function(snaps) {
+      var data = '';
       for(var i=0; i<snaps.length; i++) {
-        if(!snaps[i].exists) return null;
-        joined += snaps[i].data().d;
+        if(!snaps[i].exists) { console.warn('📁 Missing chunk', i); return null; }
+        data += snaps[i].data().d;
       }
-      return {name:meta.name, size:meta.size, type:meta.type, fileId:fileId, data:joined};
+      return {name:meta.name, size:meta.size, type:meta.type, fileId:fileId, data:data};
     });
   }).catch(function(e) { console.error('📁 Load error:', e); return null; });
 }
@@ -1174,17 +1167,33 @@ function emailBody(icon, title, details, urgentColor) {
 // DATA
 // ═══════════════════════════════════════════════════════════════
 const DEPARTMENTS = [
-  { id:1, name:"إدارة التخطيط والتنظيم", color:"#2563EB", icon:"📋", teams:[
-    {id:101,name:"التنظيم"},{id:102,name:"التخطيط"},{id:103,name:"تجربة الشركات"},{id:104,name:"تجربة الزائر"}
+  { id:1, name:"إدارة المشروع", color:"#0F172A", icon:"🎯", teams:[
+    {id:101,name:"التخطيط والحوكمة"},{id:102,name:"إدارة الميزانية"},{id:103,name:"المتابعة والتقارير"}
   ]},
-  { id:2, name:"إدارة الإعلام والمحتوى", color:"#7C3AED", icon:"🎨", teams:[
-    {id:201,name:"فريق التصميم"},{id:202,name:"التسويق"},{id:203,name:"التصوير"},{id:204,name:"الأبحاث وكتابة المحتوى"}
+  { id:2, name:"الشراكات والرعايات", color:"#059669", icon:"🤝", teams:[
+    {id:201,name:"الشراكات الاستراتيجية"},{id:202,name:"إدارة الرعاة"},{id:203,name:"إدارة الأركان والعارضين"}
   ]},
-  { id:3, name:"إدارة العلاقات العامة", color:"#059669", icon:"🤝", teams:[
-    {id:301,name:"الشراكات الإستراتيجية والتعاونات"},{id:302,name:"الرعايات"}
+  { id:3, name:"التصميم والتجهيز", color:"#7C3AED", icon:"🎨", teams:[
+    {id:301,name:"الهوية البصرية"},{id:302,name:"تصميم تجربة المعرض"},{id:303,name:"تجهيز وتصميم البهو"},{id:304,name:"التجهيزات اللوجستية"}
   ]},
-  { id:4, name:"إدارة التقارير والمتابعة والميزانية", color:"#D97706", icon:"📊", teams:[]},
-  { id:5, name:"إدارة الموارد البشرية", color:"#DC2626", icon:"👥", teams:[]}
+  { id:4, name:"المحتوى والبرامج", color:"#2563EB", icon:"📚", teams:[
+    {id:401,name:"الجلسات الحوارية"},{id:402,name:"ورش العمل"},{id:403,name:"التجارب التفاعلية"},{id:404,name:"الأركان"}
+  ]},
+  { id:5, name:"التسويق والإعلام", color:"#EC4899", icon:"📢", teams:[
+    {id:501,name:"الخطة التسويقية"},{id:502,name:"صناعة المحتوى"},{id:503,name:"العلاقات العامة"},{id:504,name:"التغطية والتصوير"}
+  ]},
+  { id:6, name:"إدارة الموارد البشرية", color:"#DC2626", icon:"👥", teams:[
+    {id:601,name:"التخطيط"},{id:602,name:"الاستقطاب والتدريب"},{id:603,name:"التشغيل يوم الحدث"}
+  ]},
+  { id:7, name:"التقنية والأتمتة", color:"#14B8A6", icon:"💻", teams:[
+    {id:701,name:"أنظمة التسجيل"},{id:702,name:"قياس الأداء"},{id:703,name:"التواصل الداخلي"}
+  ]},
+  { id:8, name:"إدارة المخاطر والاستجابة", color:"#D97706", icon:"⚠️", teams:[
+    {id:801,name:"إدارة المخاطر"},{id:802,name:"الاستجابة السريعة"}
+  ]},
+  { id:9, name:"تجربة الزائر", color:"#8B5CF6", icon:"🌟", teams:[
+    {id:901,name:"رحلة الزائر"},{id:902,name:"التميز التجريبي"}
+  ]}
 ];
 
 let members = [
@@ -1315,7 +1324,7 @@ function getSortedMembers(filterRole) {
   }
   return list;
 }
-const isHR = () => currentUser.dept === 5 || currentUser.role === 'admin';
+const isHR = () => currentUser.dept === 6 || currentUser.role === 'admin';
 const badge = (text, color, bg) => `<span class="badge" style="background:${bg||color+'18'};color:${color}">${text}</span>`;
 const today = () => new Date().toISOString().slice(0,10);
 const pendingCount = () => approvals.filter(a => a.status === 'pending').length;
@@ -1380,41 +1389,6 @@ function filterRegTeams() {
   }
 }
 
-function forgotPassword() {
-  var email = ($('loginEmail')||{}).value||'';
-  if(!email || !email.includes('@')) {
-    showModal('🔑 استعادة كلمة المرور',
-      '<div class="form-group"><label class="form-label">أدخل بريدك الإلكتروني</label><input class="form-input" id="resetEmail" placeholder="example@fintech.sa" value="'+email+'"></div>' +
-      '<button class="btn btn-primary btn-lg btn-block" onclick="sendResetEmail()">📧 إرسال رابط الاستعادة</button>');
-    return;
-  }
-  sendResetEmail(email);
-}
-
-function sendResetEmail(emailParam) {
-  var email = emailParam || (document.getElementById('resetEmail')||{}).value||'';
-  if(!email || !email.includes('@')) { showToast('⚠️ يرجى إدخال بريد إلكتروني صحيح','#DC2626'); return; }
-  if(!auth) { showToast('⚠️ خدمة المصادقة غير متاحة','#DC2626'); return; }
-  showToast('⏳ جاري إرسال رابط الاستعادة...','var(--blue)');
-  auth.sendPasswordResetEmail(email).then(function() {
-    hideModal();
-    showToast('✅ تم إرسال رابط استعادة كلمة المرور إلى: '+email,'#059669');
-    showModal('📧 تم الإرسال',
-      '<div style="text-align:center;padding:20px">' +
-      '<div style="font-size:56px;margin-bottom:14px">📧</div>' +
-      '<div style="font-weight:800;font-size:16px;margin-bottom:10px">تم إرسال رابط الاستعادة</div>' +
-      '<div style="font-size:13px;color:var(--slate-500);line-height:1.8;margin-bottom:16px">تم إرسال رابط استعادة كلمة المرور إلى<br><strong style="color:var(--navy)">'+email+'</strong><br>تفقد بريدك الإلكتروني (وبريد السبام)</div>' +
-      '<button class="btn btn-primary btn-lg btn-block" onclick="hideModal()">حسناً</button></div>');
-  }).catch(function(err) {
-    console.error('Reset password error:', err);
-    var msg = 'حدث خطأ — حاول مرة أخرى';
-    if(err.code==='auth/user-not-found') msg = 'البريد الإلكتروني غير مسجّل';
-    if(err.code==='auth/invalid-email') msg = 'البريد الإلكتروني غير صحيح';
-    if(err.code==='auth/too-many-requests') msg = 'طلبات كثيرة — انتظر قليلاً';
-    showToast('❌ '+msg,'#DC2626');
-  });
-}
-
 function handleLogin() {
   const email = $('loginEmail').value.trim();
   const pass = $('loginPass').value;
@@ -1469,6 +1443,54 @@ function handleLogin() {
     if(err.code==='auth/network-request-failed') msg='لا يوجد اتصال بالإنترنت';
     if(err.code==='auth/operation-not-allowed') msg='تسجيل الإيميل غير مفعّل — فعّله من Firebase Console';
     errEl.textContent = msg + ' [' + (err.code||'') + ']';
+  });
+}
+
+function showForgotPassword() {
+  var email = $('loginEmail').value.trim();
+  showModal('🔑 نسيت كلمة المرور',
+    '<div style="text-align:center;margin-bottom:16px"><div style="font-size:48px;margin-bottom:10px">📧</div><p style="font-size:13px;color:var(--slate-500);line-height:1.8">أدخل بريدك الإلكتروني وسنرسل لك رابط لإعادة تعيين كلمة المرور</p></div>' +
+    '<div class="form-group"><label class="form-label">البريد الإلكتروني</label><input class="form-input" id="resetEmail" value="'+(email||'')+'" placeholder="example@fintech.sa" type="email"></div>' +
+    '<div id="resetError" class="form-error" style="display:none"></div>' +
+    '<div id="resetSuccess" style="display:none;background:#ECFDF5;color:#059669;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600;text-align:center;margin-bottom:12px"></div>' +
+    '<button class="btn btn-primary btn-lg btn-block" id="resetBtn" onclick="handleForgotPassword()">📧 إرسال رابط إعادة التعيين</button>' +
+    '<button class="btn btn-secondary btn-lg btn-block" style="margin-top:8px" onclick="hideModal()">رجوع لتسجيل الدخول</button>');
+}
+
+function handleForgotPassword() {
+  var email = document.getElementById('resetEmail').value.trim();
+  var errEl = document.getElementById('resetError');
+  var sucEl = document.getElementById('resetSuccess');
+  var btn = document.getElementById('resetBtn');
+  errEl.style.display='none'; sucEl.style.display='none';
+
+  if(!email || !email.includes('@')) { errEl.style.display='block'; errEl.textContent='الرجاء إدخال بريد إلكتروني صحيح'; return; }
+
+  if(!_firebaseAvailable || !auth) {
+    errEl.style.display='block'; errEl.textContent='⚠️ هذه الميزة تتطلب اتصال بالإنترنت وFirebase';
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = '⏳ جاري الإرسال...'; btn.style.opacity='0.6';
+
+  auth.sendPasswordResetEmail(email).then(function() {
+    sucEl.style.display='block'; sucEl.textContent='✅ تم إرسال رابط إعادة التعيين إلى بريدك الإلكتروني — تفقّد صندوق الوارد (والسبام)';
+    btn.textContent = '✅ تم الإرسال'; btn.style.background='#059669';
+    setTimeout(function() {
+      hideModal();
+      var loginSuc = document.getElementById('loginResetSuccess');
+      if(loginSuc) { loginSuc.style.display='block'; loginSuc.textContent='📧 تم إرسال رابط إعادة التعيين — تفقّد بريدك الإلكتروني'; }
+    }, 2500);
+  }).catch(function(err) {
+    btn.disabled = false; btn.textContent = '📧 إرسال رابط إعادة التعيين'; btn.style.opacity='1';
+    errEl.style.display='block';
+    var msg = 'حدث خطأ أثناء إرسال رابط إعادة التعيين';
+    if(err.code==='auth/user-not-found') msg='هذا البريد غير مسجل في النظام';
+    if(err.code==='auth/invalid-email') msg='البريد الإلكتروني غير صحيح';
+    if(err.code==='auth/too-many-requests') msg='محاولات كثيرة — حاول مرة أخرى بعد دقائق';
+    if(err.code==='auth/network-request-failed') msg='لا يوجد اتصال بالإنترنت';
+    errEl.textContent = msg;
+    console.error('Reset password error:', err.code, err.message);
   });
 }
 
@@ -1685,12 +1707,12 @@ function buildNav() {
     {id:'dashboard',icon:'📊',label:'لوحة التحكم'},
     ...(currentUser.role!=='supervisor'?[{id:'tasks',icon:'✅',label:'المهام'}]:[]),
     {id:'reports',icon:'📝',label:'التقارير'},
-    ...(currentUser.role!=='member'||currentUser.dept==5?[{id:'approvals',icon:'📋',label:'الموافقات'}]:[]),
+    ...(currentUser.role!=='member'||currentUser.dept==6?[{id:'approvals',icon:'📋',label:'الموافقات'}]:[]),
     {id:'announcements',icon:'📢',label:'لوحة الإعلانات'},
     ...(currentUser.role!=='supervisor'?[{id:'teams',icon:'👥',label:'الفرق والأعضاء'}]:[]),
-    ...(currentUser.role==='admin'||currentUser.dept==5?[{id:'structure',icon:'🏛️',label:'الهيكل التنظيمي'}]:[]),
+    ...(currentUser.role==='admin'||currentUser.dept==6?[{id:'structure',icon:'🏛️',label:'الهيكل التنظيمي'}]:[]),
     ...(currentUser.role!=='supervisor'?[{id:'timeline',icon:'📅',label:'الجدول الزمني'}]:[]),
-    ...((currentUser.role==='admin'||currentUser.dept==5)?[{id:'warnings',icon:'⚠️',label:'الإنذارات'}]:[]),
+    ...((currentUser.role==='admin'||currentUser.dept==6)?[{id:'warnings',icon:'⚠️',label:'الإنذارات'}]:[]),
     ...(currentUser.role!=='supervisor'?[{id:'companies',icon:'🏢',label:'الشركات والشراكات'}]:[]),
     {id:'wbs',icon:'📐',label:'مرجعيات المشروع'},
     {id:'bugs',icon:'📢',label:'بلاغات المشاكل'},
@@ -1705,7 +1727,7 @@ function buildNav() {
 function updatePendingBadge() {
   const c = pendingCount();
   const b = $('pendingBadge');
-  if(c > 0 && (currentUser.role !== 'member' || currentUser.dept==5)) { b.style.display='inline-block'; b.textContent=c+' موافقة معلقة'; }
+  if(c > 0 && (currentUser.role !== 'member' || currentUser.dept==6)) { b.style.display='inline-block'; b.textContent=c+' موافقة معلقة'; }
   else { b.style.display='none'; }
 }
 
@@ -1722,7 +1744,7 @@ function navigate(page) {
   if(currentUser.role==='supervisor' && ['tasks','teams','timeline','companies','structure','warnings'].indexOf(page)!==-1) {
     page = 'dashboard';
   }
-  if(currentUser.role==='member' && ['warnings','structure'].indexOf(page)!==-1 && currentUser.dept!=5) {
+  if(currentUser.role==='member' && ['warnings','structure'].indexOf(page)!==-1 && currentUser.dept!=6) {
     page = 'dashboard';
   }
   if(currentPage && currentPage !== page) navHistory.push(currentPage);
@@ -1777,7 +1799,7 @@ function closeModal(e) { if(e.target === $('modalOverlay')) hideModal(); }
 // ═══════════════════════════════════════════════════════════════
 function renderDashboard() {
   if(currentUser.role==='supervisor') { renderSupervisorDashboard(); return; }
-  const myTasks = (currentUser.role==='member' && currentUser.dept!=5) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
+  const myTasks = (currentUser.role==='member' && currentUser.dept!=6) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
   const total=myTasks.length, completed=myTasks.filter(t=>t.status==='completed').length;
   const inProg=myTasks.filter(t=>t.status==='in_progress').length, delayed=myTasks.filter(t=>t.status==='delayed').length;
   const notStarted=myTasks.filter(t=>t.status==='not_started').length;
@@ -2109,7 +2131,7 @@ function renderSupervisorDashboard() {
 let taskFilter = 'all', taskDeptFilter = 'all';
 
 function renderTasks() {
-  let myTasks = (currentUser.role==='member' && currentUser.dept!=5) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
+  let myTasks = (currentUser.role==='member' && currentUser.dept!=6) ? tasks.filter(t=>String(t.assignedTo)===String(currentUser.id)) : tasks;
   let filtered = myTasks.filter(t => {
     if(taskFilter!=='all' && t.status!==taskFilter) return false;
     if(taskDeptFilter!=='all' && t.dept!==parseInt(taskDeptFilter)) return false;
@@ -2147,7 +2169,7 @@ function renderTasks() {
             <span>📊 ${t.progress}%</span>
           </div>
           <div class="progress-bar mt-10"><div class="progress-fill" style="width:${t.progress}%;background:${STATUS[t.status].color}"></div></div>
-          ${(currentUser.role==='admin'||currentUser.role==='supervisor'||currentUser.dept==5||String(t.assignedTo)===String(currentUser.id))?`
+          ${(currentUser.role==='admin'||currentUser.role==='supervisor'||currentUser.dept==6||String(t.assignedTo)===String(currentUser.id))?`
             <div class="task-actions">
               ${t.status!=='completed'?`<button class="btn btn-success btn-sm" onclick="updateTask(${t.id},'completed',100)">✅ إنجاز</button>`:''}
               ${t.status==='completed'?`<button class="btn btn-danger btn-sm" onclick="updateTask(${t.id},'in_progress',80)">↩️ تراجع</button>`:''}
@@ -2308,14 +2330,17 @@ function buildReturnedBanner(returnedReports, count) {
 // ═══════════════════════════════════════════════════════════════
 function renderReports() {
   var visibleReports = reports.filter(function(r) {
+    // Author and admin always see their reports
     if(currentUser.role==='admin') return true;
     if(String(r.author)===String(currentUser.id)) return true;
+    // Only published reports are visible to others
     if(r.status!=='published') return false;
     // Audience filter
     var aud = r.audience || 'all';
     if(aud==='all') return true;
-    if(aud==='supervisor' && currentUser.role==='supervisor') return true;
-    if(aud==='team' && currentUser.role!=='supervisor') return true;
+    if(aud==='supervisors' && (currentUser.role==='supervisor' || currentUser.role==='admin')) return true;
+    if(aud==='admins' && currentUser.role==='admin') return true;
+    if(aud==='members' && currentUser.role==='member') return true;
     return false;
   });
   var pendingForAdmin = reports.filter(function(r){return r.status==='pending_approval'}).length;
@@ -2332,13 +2357,16 @@ function renderReports() {
       visibleReports.slice().sort((a,b)=>b.id-a.id).map((r,i)=>{
         const author=getMember(r.author), d=getDept(r.dept);
         const typeLabel = r.type==='progress'?'📊 تقدم':r.type==='financial'?'💰 مالي':'📋 عام';
+        const audLabel = r.audience==='supervisors'?'🎓 للمشرفين':r.audience==='admins'?'👑 للمدراء':r.audience==='members'?'👤 للأعضاء':'👥 للكل';
+        const audColor = r.audience==='supervisors'?'#2563EB':r.audience==='admins'?'#7C3AED':r.audience==='members'?'#64748B':'#059669';
         const statusInfo = r.status==='published'?{l:'منشور ✅',c:'#059669',bg:'#ECFDF5'}:r.status==='pending_approval'?{l:'بانتظار الموافقة ⏳',c:'#D97706',bg:'#FEF3C7'}:r.status==='returned'?{l:'مُرتجع ↩️',c:'#DC2626',bg:'#FEF2F2'}:{l:'مسودة 📝',c:'#64748B',bg:'#F1F5F9'};
+        const comments = r.comments || [];
         return `<div class="report-card animate-in" style="animation-delay:${0.05+i*0.04}s">
           <div class="flex-between">
             <div style="flex:1">
               <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
                 ${badge(statusInfo.l,statusInfo.c,statusInfo.bg)}
-                ${badge(typeLabel,'#64748B')} ${d?badge(d.icon+' '+d.name,d.color):''} ${r.audience==='supervisor'?badge('🎓 للمشرف','#7C3AED','#F5F3FF'):r.audience==='team'?badge('👤 للفريق','#059669','#ECFDF5'):''}
+                ${badge(typeLabel,'#64748B')} ${badge(audLabel,audColor)} ${d?badge(d.icon+' '+d.name,d.color):''}
               </div>
               <div style="font-size:16px;font-weight:700;margin-bottom:4px">${r.title}</div>
               <div style="font-size:13px;color:var(--slate-500);line-height:1.7">${r.content?(r.content.slice(0,200)+(r.content.length>200?'...':'')):'(تقرير بملف مرفق)'}</div>
@@ -2346,11 +2374,8 @@ function renderReports() {
               ${r.images&&r.images.length>0?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${r.images.map(function(img,imgIdx){var src=img.data||img.url||''; return src ? '<img src="'+src+'" onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid var(--slate-200);cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">':'<div onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;display:flex;align-items:center;justify-content:center;font-size:28px;background:#F1F5F9;border-radius:8px;border:2px solid #E2E8F0;cursor:pointer" title="اضغط لتحميل الصورة">🖼️</div>'}).join('')}</div>`:''}
               <div style="font-size:12px;color:var(--slate-400);margin-top:8px">✍️ ${(author&&author.name)||''} — 📅 ${r.date}</div>
               ${r.rejectReason?`<div style="margin-top:8px;padding:10px 14px;background:#FEF2F2;border-radius:8px;border:1px solid #FECACA"><span style="font-size:12px;color:#DC2626;font-weight:700">↩️ سبب الإرجاع:</span> <span style="font-size:12px;color:#991B1B">${r.rejectReason}</span></div>`:''}
-              <div style="margin-top:12px;border-top:1px solid #E2E8F0;padding-top:10px">
-                <div style="font-size:12px;font-weight:700;color:var(--slate-600);margin-bottom:8px">💬 التعليقات ${r.comments&&r.comments.length?'('+r.comments.length+')':''}</div>
-                ${r.comments&&r.comments.length?r.comments.map(function(c){var cm=getMember(c.author);return '<div style="padding:8px 12px;background:#F8FAFC;border-radius:8px;margin-bottom:6px;border-right:3px solid var(--gold)"><div style="font-size:12px;font-weight:700;color:var(--navy)">'+(cm&&cm.name||'')+'<span style="font-weight:400;color:var(--slate-400);margin-right:8px">'+c.date+'</span></div><div style="font-size:13px;color:var(--slate-700);margin-top:4px;line-height:1.6">'+c.text+'</div></div>'}).join(''):'<div style="font-size:12px;color:var(--slate-400)">لا توجد تعليقات بعد</div>'}
-                <div style="display:flex;gap:8px;margin-top:8px"><input class="form-input" id="rptComment${r.id}" placeholder="أضف تعليقاً..." style="flex:1;padding:8px 12px;font-size:12px"><button class="btn btn-sm" style="background:var(--gold);color:#fff;white-space:nowrap" onclick="addReportComment(${r.id})">إرسال 💬</button></div>
-              </div>
+              ${comments.length>0?`<div style="margin-top:12px;border-top:1px solid var(--slate-200);padding-top:12px"><div style="font-size:12px;font-weight:700;color:var(--slate-500);margin-bottom:8px">💬 التعليقات (${comments.length})</div>${comments.slice(-3).map(function(c){var cm=getMember(c.authorId);return '<div style="padding:10px 14px;border-radius:10px;background:var(--slate-50);border-right:3px solid var(--gold);margin-bottom:6px"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><strong style="font-size:12px;color:var(--gold-dark)">'+(cm?cm.name:'مجهول')+'</strong><span style="font-size:10px;color:var(--slate-400)">'+c.date+'</span></div><div style="font-size:13px;color:var(--slate-700);line-height:1.7">'+c.text+'</div></div>'}).join('')}${comments.length>3?'<div style="font-size:11px;color:var(--slate-400);text-align:center;cursor:pointer" onclick="showAllComments('+r.id+')">عرض جميع التعليقات ('+comments.length+')</div>':''}</div>`:''}
+              <div style="margin-top:10px"><button class="btn btn-sm" style="background:var(--slate-50);color:var(--slate-600);border:1px solid var(--slate-200)" onclick="showAddCommentModal(${r.id})">💬 أضف تعليق${comments.length>0?' ('+comments.length+')':''}</button></div>
             </div>
             <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-start;flex-shrink:0">
               ${r.status==='pending_approval'&&currentUser.role==='admin'?`
@@ -2365,30 +2390,59 @@ function renderReports() {
       }).join('')}`;
 }
 
-function addReportComment(id) {
-  var input = document.getElementById('rptComment'+id);
-  if(!input) return;
-  var text = input.value.trim();
-  if(!text) { showToast('⚠️ اكتب تعليقاً أولاً','#DC2626'); return; }
+function publishReport(id) {
   var rpt = reports.find(function(r){return r.id===id});
   if(!rpt) return;
-  if(!rpt.comments) rpt.comments = [];
-  rpt.comments.push({author:currentUser.id, text:text, date:today()+' '+new Date().toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'})});
-  input.value = '';
-  renderReports(); saveSession();
-  showToast('💬 تم إضافة التعليق','#059669');
+  var currentAud = rpt.audience || 'all';
+  showModal('📤 نشر التقرير — اختر الفئة المستهدفة',
+    '<div style="margin-bottom:16px;padding:12px;background:var(--slate-50);border-radius:10px;text-align:center"><div style="font-weight:700">'+rpt.title+'</div></div>' +
+    '<div class="form-group"><label class="form-label">🎯 من يشوف التقرير بعد النشر؟</label>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<div onclick="selectPublishAudience(\'all\')" id="pub_all" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='all'?'var(--gold)':'var(--slate-200)')+';background:'+(currentAud==='all'?'#FEF3C7':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👥</div><div style="font-size:11px;font-weight:700;margin-top:4px">الكل</div></div>' +
+    '<div onclick="selectPublishAudience(\'supervisors\')" id="pub_supervisors" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='supervisors'?'var(--blue)':'var(--slate-200)')+';background:'+(currentAud==='supervisors'?'#EFF6FF':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">🎓</div><div style="font-size:11px;font-weight:700;margin-top:4px">المشرفين</div></div>' +
+    '<div onclick="selectPublishAudience(\'admins\')" id="pub_admins" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='admins'?'var(--purple)':'var(--slate-200)')+';background:'+(currentAud==='admins'?'#F3E8FF':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👑</div><div style="font-size:11px;font-weight:700;margin-top:4px">المدراء</div></div>' +
+    '<div onclick="selectPublishAudience(\'members\')" id="pub_members" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='members'?'var(--slate-500)':'var(--slate-200)')+';background:'+(currentAud==='members'?'#F1F5F9':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👤</div><div style="font-size:11px;font-weight:700;margin-top:4px">الأعضاء</div></div>' +
+    '</div><input type="hidden" id="publishAudience" value="'+currentAud+'"></div>' +
+    '<button class="btn btn-lg btn-block" style="background:linear-gradient(135deg,#059669,#047857);color:#fff" onclick="confirmPublishReport('+id+')">📤 نشر التقرير</button>');
 }
 
-function publishReport(id) {
-  reports=reports.map(function(r){return r.id===id?Object.assign({},r,{status:'published'}):r;});
-  renderReports();
+function selectPublishAudience(val) {
+  document.getElementById('publishAudience').value = val;
+  var opts = {all:{color:'var(--gold)',bg:'#FEF3C7'},supervisors:{color:'var(--blue)',bg:'#EFF6FF'},admins:{color:'var(--purple)',bg:'#F3E8FF'},members:{color:'var(--slate-500)',bg:'#F1F5F9'}};
+  ['all','supervisors','admins','members'].forEach(function(k) {
+    var el = document.getElementById('pub_'+k);
+    if(el) { el.style.borderColor = k===val ? opts[k].color : 'var(--slate-200)'; el.style.background = k===val ? opts[k].bg : '#fff'; }
+  });
+}
+
+function confirmPublishReport(id) {
+  var aud = document.getElementById('publishAudience').value || 'all';
+  reports=reports.map(function(r){return r.id===id?Object.assign({},r,{status:'published',audience:aud}):r;});
+  hideModal(); renderReports();
   showToast('✅ تم نشر التقرير بنجاح','#059669');
 }
 
 function approveReport(id) {
   var rpt = reports.find(function(r){return r.id===id});
-  reports=reports.map(function(r){return r.id===id?Object.assign({},r,{status:'published',approvedBy:currentUser.id,approvedDate:today()}):r;});
-  renderReports(); saveSession();
+  if(!rpt) return;
+  var currentAud = rpt.audience || 'all';
+  showModal('✅ موافقة ونشر — اختر الفئة المستهدفة',
+    '<div style="margin-bottom:16px;padding:12px;background:var(--slate-50);border-radius:10px;text-align:center"><div style="font-weight:700">'+rpt.title+'</div></div>' +
+    '<div class="form-group"><label class="form-label">🎯 من يشوف التقرير بعد النشر؟</label>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<div onclick="selectPublishAudience(\'all\')" id="pub_all" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='all'?'var(--gold)':'var(--slate-200)')+';background:'+(currentAud==='all'?'#FEF3C7':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👥</div><div style="font-size:11px;font-weight:700;margin-top:4px">الكل</div></div>' +
+    '<div onclick="selectPublishAudience(\'supervisors\')" id="pub_supervisors" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='supervisors'?'var(--blue)':'var(--slate-200)')+';background:'+(currentAud==='supervisors'?'#EFF6FF':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">🎓</div><div style="font-size:11px;font-weight:700;margin-top:4px">المشرفين</div></div>' +
+    '<div onclick="selectPublishAudience(\'admins\')" id="pub_admins" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='admins'?'var(--purple)':'var(--slate-200)')+';background:'+(currentAud==='admins'?'#F3E8FF':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👑</div><div style="font-size:11px;font-weight:700;margin-top:4px">المدراء</div></div>' +
+    '<div onclick="selectPublishAudience(\'members\')" id="pub_members" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='members'?'var(--slate-500)':'var(--slate-200)')+';background:'+(currentAud==='members'?'#F1F5F9':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👤</div><div style="font-size:11px;font-weight:700;margin-top:4px">الأعضاء</div></div>' +
+    '</div><input type="hidden" id="publishAudience" value="'+currentAud+'"></div>' +
+    '<button class="btn btn-lg btn-block" style="background:linear-gradient(135deg,#059669,#047857);color:#fff" onclick="confirmApproveReport('+id+')">✅ موافقة ونشر</button>');
+}
+
+function confirmApproveReport(id) {
+  var aud = document.getElementById('publishAudience').value || 'all';
+  var rpt = reports.find(function(r){return r.id===id});
+  reports=reports.map(function(r){return r.id===id?Object.assign({},r,{status:'published',audience:aud,approvedBy:currentUser.id,approvedDate:today()}):r;});
+  hideModal(); renderReports(); saveSession();
   showToast('✅ تمت الموافقة ونشر التقرير','#059669');
   if(rpt) notifyMember(rpt.author, 'تمت الموافقة على تقريرك: '+rpt.title, emailBody('✅','تمت الموافقة على تقريرك ونشره',
     [{label:'العنوان',value:rpt.title},{label:'بواسطة',value:currentUser.name},{label:'التاريخ',value:today()}], '#059669'));
@@ -2504,6 +2558,65 @@ function confirmDeleteReport(id) {
   hideModal(); renderReports(); saveSession();
 }
 
+function showAddCommentModal(reportId) {
+  var r = reports.find(function(rp){return rp.id===reportId});
+  if(!r) return;
+  showModal('💬 إضافة تعليق على: ' + r.title,
+    '<div class="form-group"><label class="form-label">التعليق</label><textarea class="form-textarea" id="commentText" placeholder="اكتب تعليقك هنا..." style="min-height:100px"></textarea></div>' +
+    '<button class="btn btn-primary btn-lg btn-block" onclick="addReportComment('+reportId+')">💬 إرسال التعليق</button>');
+}
+
+function addReportComment(reportId) {
+  var text = document.getElementById('commentText').value.trim();
+  if(!text) { showToast('⚠️ يرجى كتابة التعليق','#DC2626'); return; }
+  reports = reports.map(function(r) {
+    if(r.id===reportId) {
+      var comments = r.comments ? r.comments.slice() : [];
+      comments.push({id:Date.now(), authorId:currentUser.id, text:text, date:today()});
+      return Object.assign({}, r, {comments:comments});
+    }
+    return r;
+  });
+  hideModal(); renderReports(); saveSession();
+  showToast('💬 تم إضافة التعليق بنجاح','#059669');
+}
+
+function showAllComments(reportId) {
+  var r = reports.find(function(rp){return rp.id===reportId});
+  if(!r || !r.comments || r.comments.length===0) return;
+  var commentsHtml = r.comments.map(function(c) {
+    var cm = getMember(c.authorId);
+    var isOwn = String(c.authorId)===String(currentUser.id);
+    var canDelete = currentUser.role==='admin' || isOwn;
+    return '<div style="padding:12px 16px;border-radius:12px;background:var(--slate-50);border-right:3px solid '+(isOwn?'var(--gold)':'var(--blue)')+';margin-bottom:8px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+      '<strong style="font-size:13px;color:'+(isOwn?'var(--gold-dark)':'var(--blue)')+'">'+(cm?cm.name:'مجهول')+'</strong>' +
+      '<div style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:var(--slate-400)">'+c.date+'</span>' +
+      (canDelete?'<button onclick="deleteReportComment('+reportId+','+c.id+')" style="background:none;border:none;cursor:pointer;font-size:12px;color:#DC2626;padding:2px" title="حذف">🗑️</button>':'') +
+      '</div></div>' +
+      '<div style="font-size:13px;color:var(--slate-700);line-height:1.8">'+c.text+'</div></div>';
+  }).join('');
+  showModal('💬 جميع التعليقات — ' + r.title + ' (' + r.comments.length + ')',
+    '<div style="max-height:400px;overflow-y:auto;margin-bottom:16px">' + commentsHtml + '</div>' +
+    '<button class="btn btn-primary btn-lg btn-block" onclick="hideModal();showAddCommentModal('+reportId+')">💬 أضف تعليق جديد</button>');
+}
+
+function deleteReportComment(reportId, commentId) {
+  reports = reports.map(function(r) {
+    if(r.id===reportId) {
+      var comments = (r.comments||[]).filter(function(c){return c.id!==commentId});
+      return Object.assign({}, r, {comments:comments});
+    }
+    return r;
+  });
+  renderReports(); saveSession();
+  showToast('🗑️ تم حذف التعليق','#DC2626');
+  // Re-open comments modal if it was open
+  var rpt = reports.find(function(rp){return rp.id===reportId});
+  if(rpt && rpt.comments && rpt.comments.length>0) showAllComments(reportId);
+  else hideModal();
+}
+
 function deleteApproval(id) {
   showModal('🗑️ تأكيد الحذف', '<p style="font-size:14px;color:var(--slate-700);text-align:center;margin-bottom:20px">هل أنت متأكد من حذف هذا الطلب؟ لا يمكن التراجع عن هذا الإجراء.</p><div style="display:flex;gap:10px"><button class="btn btn-danger btn-block" onclick="confirmDeleteApproval('+id+')">🗑️ نعم، حذف</button><button class="btn btn-secondary btn-block" onclick="hideModal()">إلغاء</button></div>');
 }
@@ -2523,18 +2636,31 @@ function showAddReportModal() {
     <div class="form-group"><label class="form-label">الإدارة (اختياري)</label><select class="form-select" id="newReportDept">
       <option value="">عام</option>${DEPARTMENTS.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}
     </select></div>
+    <div class="form-group">
+      <label class="form-label">🎯 الفئة المستهدفة (من يشوف التقرير بعد النشر)</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap" id="audienceSelector">
+        <div onclick="selectAudience('all')" id="aud_all" style="flex:1;min-width:80px;text-align:center;padding:12px 8px;border-radius:12px;border:2px solid var(--gold);background:#FEF3C7;cursor:pointer;transition:all 0.2s">
+          <div style="font-size:22px">👥</div><div style="font-size:12px;font-weight:700;color:var(--gold-dark);margin-top:4px">الكل</div>
+        </div>
+        <div onclick="selectAudience('supervisors')" id="aud_supervisors" style="flex:1;min-width:80px;text-align:center;padding:12px 8px;border-radius:12px;border:2px solid var(--slate-200);background:#fff;cursor:pointer;transition:all 0.2s">
+          <div style="font-size:22px">🎓</div><div style="font-size:12px;font-weight:700;color:var(--slate-500);margin-top:4px">المشرفين</div>
+        </div>
+        <div onclick="selectAudience('admins')" id="aud_admins" style="flex:1;min-width:80px;text-align:center;padding:12px 8px;border-radius:12px;border:2px solid var(--slate-200);background:#fff;cursor:pointer;transition:all 0.2s">
+          <div style="font-size:22px">👑</div><div style="font-size:12px;font-weight:700;color:var(--slate-500);margin-top:4px">المدراء فقط</div>
+        </div>
+        <div onclick="selectAudience('members')" id="aud_members" style="flex:1;min-width:80px;text-align:center;padding:12px 8px;border-radius:12px;border:2px solid var(--slate-200);background:#fff;cursor:pointer;transition:all 0.2s">
+          <div style="font-size:22px">👤</div><div style="font-size:12px;font-weight:700;color:var(--slate-500);margin-top:4px">الأعضاء</div>
+        </div>
+      </div>
+      <input type="hidden" id="reportAudience" value="all">
+    </div>
     <div class="form-group"><label class="form-label">المحتوى (اختياري في حال إرفاق ملف)</label><textarea class="form-textarea" id="newReportContent" placeholder="اكتب محتوى التقرير بالتفصيل..." style="min-height:140px"></textarea></div>
-    <div class="form-group"><label class="form-label">الجمهور المستهدف</label><select class="form-select" id="newReportAudience">
-      <option value="all">👥 للجميع (المشرف + المدراء + الأعضاء)</option>
-      <option value="supervisor">🎓 للمشرف فقط</option>
-      <option value="team">👤 للأعضاء والمدراء فقط</option>
-    </select></div>
     <div class="form-group">
       <label class="form-label">إرفاق ملف (Word أو PDF)</label>
       <div id="reportFileZone" onclick="document.getElementById('reportFileInput').click()" style="border:2px dashed var(--slate-300);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--slate-50)">
         <div style="font-size:32px;margin-bottom:8px">📎</div>
         <div style="font-size:13px;color:var(--slate-500);font-weight:600">اضغط لإرفاق ملف</div>
-        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 50 ميجابايت</div>
+        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 25 ميجابايت</div>
       </div>
       <input type="file" id="reportFileInput" accept=".pdf,.doc,.docx" style="display:none" onchange="handleReportFile(this)">
       <div id="reportFileName" style="display:none;margin-top:8px;padding:10px 14px;background:#ECFDF5;border-radius:8px;font-size:13px;color:var(--green);font-weight:600"></div>
@@ -2560,6 +2686,15 @@ function showAddReportModal() {
   `);
 }
 
+function selectAudience(val) {
+  document.getElementById('reportAudience').value = val;
+  var opts = {all:{color:'var(--gold)',bg:'#FEF3C7'},supervisors:{color:'var(--blue)',bg:'#EFF6FF'},admins:{color:'var(--purple)',bg:'#F3E8FF'},members:{color:'var(--slate-500)',bg:'#F1F5F9'}};
+  ['all','supervisors','admins','members'].forEach(function(k) {
+    var el = document.getElementById('aud_'+k);
+    if(el) { el.style.borderColor = k===val ? opts[k].color : 'var(--slate-200)'; el.style.background = k===val ? opts[k].bg : '#fff'; }
+  });
+}
+
 function addReport(status) {
   var st = status || 'draft';
   const title=$('newReportTitle').value.trim(), content=$('newReportContent').value.trim();
@@ -2568,7 +2703,7 @@ function addReport(status) {
 
   var deptVal = parseInt(($('newReportDept')||{}).value)||null;
   var typeVal = ($('newReportType')||{}).value||'progress';
-  var audienceVal = ($('newReportAudience')||{}).value||'all';
+  var audienceVal = ($('reportAudience')||{}).value||'all';
   var localFile = reportFile ? Object.assign({},reportFile) : null;
   var localImages = reportImages.length>0 ? reportImages.slice() : null;
   reportFile=null; reportImages=[];
@@ -2597,19 +2732,34 @@ function addReport(status) {
     }
   }
 
-  // Save immediately with file data (works on this device)
-  doSave(localFile, localImages);
-
-  // Upload files to Firestore for OTHER devices
+  // Upload file first, then save with BOTH data (for current session) and fileId (for sync)
   if(localFile && localFile.data) {
-    showToast('☁️ جاري رفع الملف للسحابة...','var(--blue)');
+    showToast('⏳ جاري حفظ الملف...','var(--blue)');
     uploadToStorage(localFile, 'reports').then(function(result) {
-      if(result && result.fileId) {
-        var rpt = reports.find(function(r){return r.title===title && r.date===today()});
-        if(rpt && rpt.file) { rpt.file.fileId = result.fileId; saveSession(); }
-        showToast('☁️ ✅ الملف متاح الآن لجميع الأجهزة','#059669');
+      // KEEP data in memory so file opens immediately
+      result.data = localFile.data;
+      if(localImages && localImages.length) {
+        uploadImagesToStorage(localImages).then(function(imgResults) {
+          // Keep image data too
+          imgResults.forEach(function(ir, idx) { if(localImages[idx] && localImages[idx].data) ir.data = localImages[idx].data; });
+          doSave(result, imgResults);
+        }).catch(function(e) { doSave(result, null); });
+      } else {
+        doSave(result, null);
       }
-    }).catch(function(e){ console.warn('Cloud upload failed:', e); });
+    }).catch(function(e) {
+      console.error('Report file save error:', e);
+      // Save with data only (no fileId) — works locally
+      doSave(localFile, null);
+    });
+  } else if(localImages && localImages.length) {
+    showToast('⏳ جاري حفظ الصور...','var(--blue)');
+    uploadImagesToStorage(localImages).then(function(imgResults) {
+      imgResults.forEach(function(ir, idx) { if(localImages[idx] && localImages[idx].data) ir.data = localImages[idx].data; });
+      doSave(null, imgResults);
+    }).catch(function(e) { doSave(null, null); });
+  } else {
+    doSave(null, null);
   }
 }
 
@@ -2671,8 +2821,8 @@ function handleResponseFile(input) {
   if(!file) return;
   var ext = file.name.split('.').pop().toLowerCase();
   if(!['pdf','doc','docx'].includes(ext)) { showToast('⚠️ PDF أو Word فقط','#DC2626'); input.value=''; return; }
-  if(file.size > 50 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (50 ميجابايت)','#DC2626');
+  if(file.size > 25 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (25 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
@@ -2732,10 +2882,14 @@ function handleApproval(id, action) {
     }
   }
 
-  doSave(localResponseFile);
-  // Upload response file to cloud
   if(localResponseFile && localResponseFile.data) {
-    uploadToStorage(localResponseFile, 'responses').catch(function(e){ console.warn('Cloud upload:', e); });
+    showToast('⏳ جاري حفظ الملف...','var(--blue)');
+    uploadToStorage(localResponseFile, 'responses').then(function(result) {
+      result.data = localResponseFile.data;
+      doSave(result);
+    }).catch(function(e) { doSave(localResponseFile); });
+  } else {
+    doSave(null);
   }
 }
 
@@ -2756,7 +2910,7 @@ function showAddApprovalModal() {
       <div id="approvalFileZone" onclick="document.getElementById('approvalFileInput').click()" style="border:2px dashed var(--slate-300);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--slate-50)">
         <div style="font-size:32px;margin-bottom:8px">📎</div>
         <div style="font-size:13px;color:var(--slate-500);font-weight:600">اضغط لإرفاق ملف</div>
-        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 50 ميجابايت</div>
+        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 25 ميجابايت</div>
       </div>
       <input type="file" id="approvalFileInput" accept=".pdf,.doc,.docx" style="display:none" onchange="handleApprovalFile(this)">
       <div id="approvalFileName" style="display:none;margin-top:8px;padding:10px 14px;background:#ECFDF5;border-radius:8px;font-size:13px;color:var(--green);font-weight:600"></div>
@@ -2801,18 +2955,17 @@ function addApproval() {
       urgColor));
   }
 
-  // Save directly
-  doSave(localFile);
-  // Upload to cloud for other devices
   if(localFile && localFile.data) {
-    showToast('☁️ جاري رفع الملف للسحابة...','var(--blue)');
+    showToast('⏳ جاري حفظ الملف...','var(--blue)');
     uploadToStorage(localFile, 'approvals').then(function(result) {
-      if(result && result.fileId) {
-        var ap = approvals.find(function(a){return a.title===title && a.date===today()});
-        if(ap && ap.file) { ap.file.fileId = result.fileId; saveSession(); }
-        showToast('☁️ ✅ الملف متاح لجميع الأجهزة','#059669');
-      }
-    }).catch(function(e){ console.warn('Cloud upload failed:', e); });
+      result.data = localFile.data;
+      doSave(result);
+    }).catch(function(e) {
+      console.error('File save error:', e);
+      doSave(localFile);
+    });
+  } else {
+    doSave(null);
   }
 }
 
@@ -2947,10 +3100,13 @@ function renderTeams() {
         const team=getTeam(m.teamId);
         const mt=tasks.filter(t=>String(t.assignedTo)===String(m.id));
         const done=mt.filter(t=>t.status==='completed').length;
+        const roleColor = m.role==='admin'?'var(--gold)':m.role==='supervisor'?'var(--blue)':'var(--slate-500)';
+        const roleLabel = m.role==='admin'?'مدير':m.role==='supervisor'?'مشرف':'عضو';
+        const canChangeRole = currentUser.role==='admin' && String(m.id)!==String(currentUser.id);
         return `<div class="member-card">
           <div class="member-avatar" style="background:linear-gradient(135deg,var(--gold),var(--gold-dark))">${m.name.charAt(0)}</div>
           <div style="flex:1"><div style="font-weight:700;font-size:13px">${m.name}</div><div style="font-size:11px;color:var(--slate-400)">${(team&&team.name)||'غير محدد'}</div>
-          <div style="display:flex;gap:6px;margin-top:6px">${badge(mt.length+' مهمة','#2563EB')} ${badge(done+' مكتمل','#059669')}</div></div>
+          <div style="display:flex;gap:6px;margin-top:6px">${badge(mt.length+' مهمة','#2563EB')} ${badge(done+' مكتمل','#059669')}${canChangeRole?' <button onclick="event.stopPropagation();showChangeRoleModal('+m.id+')" style="padding:2px 8px;border-radius:6px;border:1px solid '+roleColor+';background:transparent;color:'+roleColor+';font-family:inherit;font-weight:700;font-size:10px;cursor:pointer">'+roleLabel+' ✏️</button>':''}</div></div>
         </div>`;
       }).join('')}</div>
     </div>`;
@@ -2961,10 +3117,12 @@ function renderTeams() {
         const team=getTeam(m.teamId);
         const roleColor = m.role==='admin'?'var(--gold)':m.role==='supervisor'?'var(--blue)':'var(--slate-500)';
         const roleBg = m.role==='admin'?'linear-gradient(135deg,var(--gold),var(--gold-dark))':m.role==='supervisor'?'var(--blue)':'var(--slate-500)';
+        const roleLabel = m.role==='admin'?'مدير':m.role==='supervisor'?'مشرف':'عضو';
+        const canChangeRole = currentUser.role==='admin' && String(m.id)!==String(currentUser.id);
         return `<div class="member-card">
           <div class="member-avatar" style="background:${roleBg}">${m.name.charAt(0)}</div>
           <div style="flex:1"><div style="font-weight:700;font-size:13px">${m.name}</div><div style="font-size:11px;color:var(--slate-400)">${(team&&team.name)||m.title}</div></div>
-          ${badge(m.role==='admin'?'مدير':m.role==='supervisor'?'مشرف':'عضو',roleColor)}
+          ${canChangeRole?'<button onclick="event.stopPropagation();showChangeRoleModal('+m.id+')" style="padding:4px 10px;border-radius:8px;border:1.5px solid '+roleColor+';background:'+roleColor+'12;color:'+roleColor+';font-family:inherit;font-weight:700;font-size:11px;cursor:pointer;transition:all 0.2s" onmouseover="this.style.opacity=0.7" onmouseout="this.style.opacity=1">'+roleLabel+' ✏️</button>':badge(roleLabel,roleColor)}
         </div>`;
       }).join('')}</div>
     </div>`;
@@ -3012,15 +3170,89 @@ function addMember() {
   hideModal(); renderTeams();
 }
 
+function showChangeRoleModal(memberId) {
+  var m = getMember(memberId);
+  if(!m) return;
+  var teamOpts = DEPARTMENTS.flatMap(function(d){return d.teams.map(function(t){return {id:t.id,label:d.icon+' '+t.name,deptId:d.id}})});
+  var roles = [
+    {id:'admin',label:'مدير',icon:'👑',color:'var(--gold)',bg:'#FEF3C7',desc:'صلاحيات كاملة — إدارة النظام والأعضاء والمهام'},
+    {id:'supervisor',label:'مشرف',icon:'🎓',color:'var(--blue)',bg:'#EFF6FF',desc:'مشرف جامعي — عرض التقارير والموافقات فقط'},
+    {id:'member',label:'عضو',icon:'👤',color:'var(--slate-500)',bg:'#F1F5F9',desc:'عضو فريق — تنفيذ المهام ورفع التقارير'}
+  ];
+  var teamSelectHtml = '<div class="form-group" id="roleTeamGroup" style="display:'+(m.role==='member'?'block':'none')+'"><label class="form-label">الفريق</label><select class="form-select" id="changeRoleTeam"><option value="">اختر الفريق...</option>'+teamOpts.map(function(t){return '<option value="'+t.id+'" '+(m.teamId==t.id?'selected':'')+'>'+t.label+'</option>'}).join('')+'</select></div>';
+  showModal('🔄 تغيير صلاحية — ' + m.name,
+    '<div style="margin-bottom:16px;padding:14px;background:var(--slate-50);border-radius:12px;text-align:center">' +
+    '<div style="font-size:13px;color:var(--slate-500)">الصلاحية الحالية</div>' +
+    '<div style="font-size:18px;font-weight:800;margin-top:4px">' + (m.role==='admin'?'👑 مدير':m.role==='supervisor'?'🎓 مشرف':'👤 عضو') + '</div></div>' +
+    '<div class="form-group"><label class="form-label">الصلاحية الجديدة</label>' +
+    '<div style="display:flex;flex-direction:column;gap:8px">' +
+    roles.map(function(r) {
+      return '<div onclick="selectNewRole(\''+r.id+'\')" id="roleOpt_'+r.id+'" style="padding:14px;border-radius:12px;border:2px solid '+(m.role===r.id?r.color:'var(--slate-200)')+';background:'+(m.role===r.id?r.bg:'#fff')+';cursor:pointer;transition:all 0.2s">' +
+        '<div style="display:flex;align-items:center;gap:10px">' +
+        '<span style="font-size:22px">'+r.icon+'</span>' +
+        '<div><div style="font-weight:800;font-size:14px;color:'+r.color+'">'+r.label+'</div>' +
+        '<div style="font-size:11px;color:var(--slate-400);margin-top:2px">'+r.desc+'</div></div></div></div>';
+    }).join('') +
+    '<input type="hidden" id="newRoleValue" value="'+m.role+'">' +
+    '</div></div>' +
+    teamSelectHtml +
+    '<button class="btn btn-primary btn-lg btn-block" onclick="changeRole('+memberId+')">💾 حفظ التغيير</button>');
+}
+
+function selectNewRole(role) {
+  document.getElementById('newRoleValue').value = role;
+  var colors = {admin:'var(--gold)',supervisor:'var(--blue)',member:'var(--slate-500)'};
+  var bgs = {admin:'#FEF3C7',supervisor:'#EFF6FF',member:'#F1F5F9'};
+  ['admin','supervisor','member'].forEach(function(r) {
+    var el = document.getElementById('roleOpt_'+r);
+    if(el) { el.style.borderColor = r===role?colors[r]:'var(--slate-200)'; el.style.background = r===role?bgs[r]:'#fff'; }
+  });
+  var teamGroup = document.getElementById('roleTeamGroup');
+  if(teamGroup) teamGroup.style.display = role==='member'?'block':'none';
+}
+
+function changeRole(memberId) {
+  var newRole = document.getElementById('newRoleValue').value;
+  var teamSelect = document.getElementById('changeRoleTeam');
+  var newTeamId = teamSelect ? parseInt(teamSelect.value)||null : null;
+  var newTeam = newTeamId ? getTeam(newTeamId) : null;
+
+  if(newRole==='member' && !newTeamId) { showToast('⚠️ يرجى اختيار الفريق للعضو','#DC2626'); return; }
+
+  members = members.map(function(m) {
+    if(String(m.id)===String(memberId)) {
+      var updated = Object.assign({}, m, {role: newRole});
+      if(newRole==='admin') {
+        updated.title = 'مدير';
+        updated.teamId = null;
+        updated.dept = null;
+      } else if(newRole==='supervisor') {
+        updated.title = 'مشرف الفعالية';
+        updated.teamId = null;
+        updated.dept = null;
+      } else {
+        updated.title = 'عضو';
+        updated.teamId = newTeamId;
+        updated.dept = newTeam ? newTeam.dept.id : null;
+      }
+      return updated;
+    }
+    return m;
+  });
+  hideModal(); saveSession(); renderTeams();
+  showToast('✅ تم تغيير الصلاحية بنجاح','#059669');
+}
+
 // ═══════════════════════════════════════════════════════════════
 // STRUCTURE
 // ═══════════════════════════════════════════════════════════════
 function renderStructure() {
+  const totalTeams = DEPARTMENTS.reduce((a,d)=>a+d.teams.length,0);
   $('mainContent').innerHTML = `
     <div class="flex-between page-header animate-in">
       <div>
         <div class="page-title">🏛️ الهيكل التنظيمي</div>
-        <div class="page-sub">فعالية روافد الفنتك — 5 إدارات و16 فريق عمل</div>
+        <div class="page-sub">فعالية روافد الفنتك — ${DEPARTMENTS.length} إدارات و${totalTeams} فريق عمل</div>
       </div>
     </div>
     <div class="founder-card animate-in" style="animation-delay:0.05s">
@@ -3031,7 +3263,7 @@ function renderStructure() {
       </div>
       <div style="font-size:11px;color:var(--slate-400);margin-top:12px">نادي TechNation ونادي المالية — جامعة الإمام محمد بن سعود الإسلامية</div>
     </div>
-    <div class="grid-2">
+    <div class="grid-2" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
       ${DEPARTMENTS.map((d,i)=>`
         <div class="card animate-in" style="border-top:4px solid ${d.color};animation-delay:${0.1+i*0.06}s">
           <div class="text-center mb-16">
@@ -3338,33 +3570,28 @@ function openResponseFile(id) {
 let approvalFile = null;
 
 function handleApprovalFile(input) {
-  var file = input.files[0];
+  const file = input.files[0];
   if(!file) return;
-  var ext = file.name.split('.').pop().toLowerCase();
+  const ext = file.name.split('.').pop().toLowerCase();
   if(!['pdf','doc','docx'].includes(ext)) {
     showToast('⚠️ يرجى رفع ملف PDF أو Word فقط','#DC2626');
     input.value = '';
     return;
   }
-  if(file.size > 50 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (50 ميجابايت)','#DC2626');
+  if(file.size > 25 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (25 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
-  showToast('⏳ جاري قراءة الملف...','var(--blue)');
-  var reader = new FileReader();
+  const reader = new FileReader();
   reader.onload = function(e) {
     approvalFile = {name: file.name, size: (file.size/1024).toFixed(1)+'KB', type: ext, data: e.target.result};
-    var zone = document.getElementById('approvalFileZone');
-    if(zone) { zone.style.borderColor = 'var(--green)'; zone.style.background = '#ECFDF5'; }
-    var nameDiv = document.getElementById('approvalFileName');
-    if(nameDiv) {
-      nameDiv.style.display = 'block';
-      nameDiv.innerHTML = '📄 '+file.name+' <span style="color:var(--slate-400);font-weight:400">('+approvalFile.size+')</span> <button onclick="removeApprovalFile(event)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;margin-right:8px">✕</button>';
-    }
-    showToast('✅ تم تحميل الملف: '+file.name,'#059669');
+    document.getElementById('approvalFileZone').style.borderColor = 'var(--green)';
+    document.getElementById('approvalFileZone').style.background = '#ECFDF5';
+    const nameDiv = document.getElementById('approvalFileName');
+    nameDiv.style.display = 'block';
+    nameDiv.innerHTML = '📄 '+file.name+' <span style="color:var(--slate-400);font-weight:400">('+approvalFile.size+')</span> <button onclick="removeApprovalFile(event)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;margin-right:8px">✕</button>';
   };
-  reader.onerror = function() { showToast('❌ فشل قراءة الملف','#DC2626'); };
   reader.readAsDataURL(file);
 }
 
@@ -3384,35 +3611,28 @@ let reportFile = null;
 var reportImages = [];
 
 function handleReportFile(input) {
-  var file = input.files[0];
+  const file = input.files[0];
   if(!file) return;
-  var ext = file.name.split('.').pop().toLowerCase();
+  const ext = file.name.split('.').pop().toLowerCase();
   if(!['pdf','doc','docx'].includes(ext)) {
     showToast('⚠️ يرجى رفع ملف PDF أو Word فقط','#DC2626');
     input.value = '';
     return;
   }
-  if(file.size > 50 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (50 ميجابايت)','#DC2626');
+  if(file.size > 25 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (25 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
-  showToast('⏳ جاري قراءة الملف...','var(--blue)');
-  var reader = new FileReader();
+  const reader = new FileReader();
   reader.onload = function(e) {
     reportFile = {name: file.name, size: (file.size/1024).toFixed(1)+'KB', type: ext, data: e.target.result};
-    var zone = document.getElementById('reportFileZone');
-    if(zone) { zone.style.borderColor = 'var(--green)'; zone.style.background = '#ECFDF5'; }
-    var nameDiv = document.getElementById('reportFileName');
-    if(nameDiv) {
-      nameDiv.style.display = 'block';
-      nameDiv.innerHTML = '📄 '+file.name+' <span style="color:var(--slate-400);font-weight:400">('+reportFile.size+')</span> <button onclick="removeReportFile(event)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;margin-right:8px">✕</button>';
-    }
-    showToast('✅ تم تحميل الملف: '+file.name,'#059669');
-  };
-  reader.onerror = function(e) {
-    console.error('FileReader error:', e);
-    showToast('❌ فشل قراءة الملف — جرب ملف أصغر','#DC2626');
+    const zone = document.getElementById('reportFileZone');
+    zone.style.borderColor = 'var(--green)';
+    zone.style.background = '#ECFDF5';
+    const nameDiv = document.getElementById('reportFileName');
+    nameDiv.style.display = 'block';
+    nameDiv.innerHTML = '📄 '+file.name+' <span style="color:var(--slate-400);font-weight:400">('+reportFile.size+')</span> <button onclick="removeReportFile(event)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;margin-right:8px">✕</button>';
   };
   reader.readAsDataURL(file);
 }
@@ -3432,7 +3652,7 @@ function handleReportImages(input) {
   for(var i=0;i<files.length;i++) {
     (function(file){
       if(!file.type.startsWith('image/')) return;
-      if(file.size > 50*1024*1024) { showToast('⚠️ حجم الصورة '+file.name+' يتجاوز 50 ميجابايت','#DC2626'); return; }
+      if(file.size > 25*1024*1024) { showToast('⚠️ حجم الصورة '+file.name+' يتجاوز 25 ميجابايت','#DC2626'); return; }
       var reader = new FileReader();
       reader.onload = function(e) {
         reportImages.push({name:file.name, data:e.target.result, size:(file.size/1024).toFixed(0)+'KB'});
@@ -3837,38 +4057,128 @@ function deleteCompany(id) {
 // ═══════════════════════════════════════════════════════════════
 
 var defaultWbsPhases = [
-    { id:1, name:'مرحلة التخطيط والإعداد', dept:'إدارة التخطيط والتنظيم', color:'#2563EB', tasks:[
-      {name:'تحديد أهداف الفعالية ونطاقها',assigned:'رئيسات الفعالية'},
-      {name:'إعداد الهيكل التنظيمي وتوزيع الأدوار',assigned:'رئيسات الفعالية'},
-      {name:'وضع الجدول الزمني للفعالية',assigned:'فريق التخطيط'},
-      {name:'تحديد الميزانية والموارد المطلوبة',assigned:'إدارة التقارير والميزانية'},
-      {name:'التنسيق مع عمادة الجامعة للموافقات',assigned:'رئيسات الفعالية'}
+    { id:1, name:'إدارة المشروع', dept:'التخطيط والحوكمة', color:'#0F172A', tasks:[
+      {name:'كتابة ميثاق المشروع',assigned:'التخطيط والحوكمة'},
+      {name:'تحديد النطاق',assigned:'التخطيط والحوكمة'},
+      {name:'رسم الجدول الزمني',assigned:'التخطيط والحوكمة'},
+      {name:'خطة الاتصالات',assigned:'التخطيط والحوكمة'},
+      {name:'خطة المخاطر',assigned:'التخطيط والحوكمة'},
+      {name:'مؤشرات الأداء KPIs',assigned:'التخطيط والحوكمة'},
+      {name:'إعداد الميزانية التفصيلية',assigned:'إدارة الميزانية'},
+      {name:'اعتماد الصرف',assigned:'إدارة الميزانية'},
+      {name:'متابعة التكاليف',assigned:'إدارة الميزانية'},
+      {name:'تقارير التكاليف',assigned:'إدارة الميزانية'},
+      {name:'الداشبورد',assigned:'المتابعة والتقارير'},
+      {name:'الاجتماعات الأسبوعية',assigned:'المتابعة والتقارير'},
+      {name:'التقرير المرحلي',assigned:'المتابعة والتقارير'},
+      {name:'التقرير الختامي',assigned:'المتابعة والتقارير'}
     ]},
-    { id:2, name:'مرحلة التصميم والمحتوى', dept:'إدارة الإعلام والمحتوى', color:'#7C3AED', tasks:[
-      {name:'تصميم الهوية البصرية والشعار',assigned:'فريق التصميم'},
-      {name:'إعداد المحتوى التسويقي والإعلاني',assigned:'التسويق'},
-      {name:'كتابة المحتوى العلمي والأبحاث',assigned:'الأبحاث وكتابة المحتوى'},
-      {name:'إعداد خطة التغطية التصويرية',assigned:'التصوير'},
-      {name:'تصميم المواد المطبوعة والرقمية',assigned:'فريق التصميم'}
+    { id:2, name:'الشراكات والرعايات', dept:'إدارة العلاقات والشراكات', color:'#059669', tasks:[
+      {name:'قائمة الجهات المستهدفة',assigned:'الشراكات الاستراتيجية'},
+      {name:'إعداد باقات الشراكة',assigned:'الشراكات الاستراتيجية'},
+      {name:'التواصل الرسمي',assigned:'الشراكات الاستراتيجية'},
+      {name:'توقيع الاتفاقيات',assigned:'الشراكات الاستراتيجية'},
+      {name:'تصميم مزايا الرعاية',assigned:'إدارة الرعاة'},
+      {name:'متابعة التزامات الرعاة',assigned:'إدارة الرعاة'},
+      {name:'تحقيق متطلبات الرعاة',assigned:'إدارة الرعاة'},
+      {name:'تقرير عائد الرعاية',assigned:'إدارة الرعاة'},
+      {name:'دليل العارض',assigned:'إدارة الأركان والعارضين'},
+      {name:'توزيع الأركان',assigned:'إدارة الأركان والعارضين'},
+      {name:'المتطلبات التقنية والفنية',assigned:'إدارة الأركان والعارضين'},
+      {name:'دعم يوم الحدث',assigned:'إدارة الأركان والعارضين'}
     ]},
-    { id:3, name:'مرحلة العلاقات والشراكات', dept:'إدارة العلاقات العامة', color:'#059669', tasks:[
-      {name:'التواصل مع الشركات المستهدفة',assigned:'الشراكات الإستراتيجية'},
-      {name:'إعداد عروض الرعاية والشراكة',assigned:'الرعايات'},
-      {name:'توقيع اتفاقيات التعاون',assigned:'الشراكات الإستراتيجية'},
-      {name:'تنسيق مشاركة المتحدثين والضيوف',assigned:'الشراكات الإستراتيجية'}
+    { id:3, name:'التصميم والتجهيز', dept:'إدارة التصميم والتجهيز', color:'#7C3AED', tasks:[
+      {name:'شعار المعرض',assigned:'الهوية البصرية'},
+      {name:'ملف الهوية',assigned:'الهوية البصرية'},
+      {name:'تصاميم الطباعة',assigned:'الهوية البصرية'},
+      {name:'تصاميم حسابات التواصل والمنشورات',assigned:'الهوية البصرية'},
+      {name:'المخطط العام للبهو',assigned:'تصميم تجربة المعرض'},
+      {name:'توزيع الأركان الخمسة',assigned:'تصميم تجربة المعرض'},
+      {name:'مسارات الزوار',assigned:'تصميم تجربة المعرض'},
+      {name:'نقاط التسجيل',assigned:'تصميم تجربة المعرض'},
+      {name:'التصميم البصري للبهو',assigned:'تجهيز وتصميم البهو'},
+      {name:'اللوحات الإرشادية إلى المعرض وداخله',assigned:'تجهيز وتصميم البهو'},
+      {name:'منصة الجلسات',assigned:'تجهيز وتصميم البهو'},
+      {name:'منطقة الورش',assigned:'تجهيز وتصميم البهو'},
+      {name:'منصات وستاندات',assigned:'التجهيزات اللوجستية'},
+      {name:'شاشات العرض',assigned:'التجهيزات اللوجستية'},
+      {name:'الصوتيات',assigned:'التجهيزات اللوجستية'},
+      {name:'الإضاءة',assigned:'التجهيزات اللوجستية'}
     ]},
-    { id:4, name:'مرحلة التنفيذ والتنظيم', dept:'إدارة التخطيط والتنظيم', color:'#2563EB', tasks:[
-      {name:'تجهيز موقع الفعالية',assigned:'التنظيم'},
-      {name:'إعداد تجربة الشركات المشاركة',assigned:'تجربة الشركات'},
-      {name:'إعداد تجربة الزائر',assigned:'تجربة الزائر'},
-      {name:'إدارة التسجيل والاستقبال',assigned:'التنظيم'},
-      {name:'التغطية المباشرة للفعالية',assigned:'التصوير'}
+    { id:4, name:'المحتوى والبرامج', dept:'إدارة المحتوى والبرامج', color:'#2563EB', tasks:[
+      {name:'تحديد المحاور',assigned:'الجلسات الحوارية'},
+      {name:'استقطاب المتحدثين',assigned:'الجلسات الحوارية'},
+      {name:'إعداد الأجندة',assigned:'الجلسات الحوارية'},
+      {name:'إدارة الجلسات',assigned:'الجلسات الحوارية'},
+      {name:'تحديد الموضوعات',assigned:'ورش العمل'},
+      {name:'تجهيز المدربين',assigned:'ورش العمل'},
+      {name:'المواد التدريبية',assigned:'ورش العمل'},
+      {name:'إدارة التسجيل',assigned:'ورش العمل'},
+      {name:'تصميم التجارب',assigned:'التجارب التفاعلية'},
+      {name:'تطبيقات فنتك تفاعلية',assigned:'التجارب التفاعلية'},
+      {name:'التجهيز الفني للتجربة',assigned:'التجارب التفاعلية'},
+      {name:'قياس التفاعل',assigned:'التجارب التفاعلية'},
+      {name:'ركن ما وراء رحلة العميل',assigned:'الأركان'},
+      {name:'ركن الكواليس',assigned:'الأركان'},
+      {name:'ركن المخاطر والاحتيال',assigned:'الأركان'},
+      {name:'ركن مسارات وظائف الفنتك',assigned:'الأركان'},
+      {name:'ركن منتجات الفنتك',assigned:'الأركان'}
     ]},
-    { id:5, name:'مرحلة المتابعة والإغلاق', dept:'إدارة التقارير والمتابعة والميزانية', color:'#D97706', tasks:[
-      {name:'إعداد التقارير النهائية',assigned:'إدارة التقارير'},
-      {name:'تقييم الأداء وقياس النتائج',assigned:'إدارة الموارد البشرية'},
-      {name:'توثيق الدروس المستفادة',assigned:'إدارة التقارير'},
-      {name:'إغلاق الميزانية والحسابات',assigned:'إدارة التقارير'}
+    { id:5, name:'التسويق والإعلام', dept:'إدارة التسويق والإعلام', color:'#EC4899', tasks:[
+      {name:'تحديد الفئة المستهدفة',assigned:'الخطة التسويقية'},
+      {name:'خطة القنوات',assigned:'الخطة التسويقية'},
+      {name:'المزيج التسويقي',assigned:'الخطة التسويقية'},
+      {name:'خطة الجذب',assigned:'الخطة التسويقية'},
+      {name:'كتابة المحتوى',assigned:'صناعة المحتوى'},
+      {name:'منشورات السوشل',assigned:'صناعة المحتوى'},
+      {name:'الإيميلات',assigned:'صناعة المحتوى'},
+      {name:'التغطية المباشرة',assigned:'صناعة المحتوى'},
+      {name:'الدعوات الرسمية',assigned:'العلاقات العامة'},
+      {name:'التنسيق الإعلامي',assigned:'العلاقات العامة'},
+      {name:'كبار الشخصيات',assigned:'العلاقات العامة'},
+      {name:'النشر الصحفي',assigned:'العلاقات العامة'},
+      {name:'تصوير فوتوغرافي',assigned:'التغطية والتصوير'},
+      {name:'تصوير فيديو',assigned:'التغطية والتصوير'},
+      {name:'مقابلات',assigned:'التغطية والتصوير'},
+      {name:'فيديو ختامي',assigned:'التغطية والتصوير'}
+    ]},
+    { id:6, name:'إدارة الموارد البشرية', dept:'إدارة الموارد البشرية', color:'#DC2626', tasks:[
+      {name:'هيكل الفريق',assigned:'التخطيط'},
+      {name:'توصيف الأدوار',assigned:'التخطيط'},
+      {name:'خطة المناوبات',assigned:'التخطيط'},
+      {name:'اختيار المتطوعين',assigned:'الاستقطاب والتدريب'},
+      {name:'التدريب التشغيلي',assigned:'الاستقطاب والتدريب'},
+      {name:'دليل المتطوع',assigned:'الاستقطاب والتدريب'},
+      {name:'إدارة الفرق',assigned:'التشغيل يوم الحدث'},
+      {name:'إدارة الحشود',assigned:'التشغيل يوم الحدث'},
+      {name:'الدعم السريع',assigned:'التشغيل يوم الحدث'}
+    ]},
+    { id:7, name:'التقنية والأتمتة', dept:'إدارة التقنية والأتمتة', color:'#14B8A6', tasks:[
+      {name:'منصة التسجيل',assigned:'أنظمة التسجيل'},
+      {name:'QR للدخول',assigned:'أنظمة التسجيل'},
+      {name:'قائمة الحضور',assigned:'أنظمة التسجيل'},
+      {name:'تتبع الزوار',assigned:'قياس الأداء'},
+      {name:'استبيان الرضا',assigned:'قياس الأداء'},
+      {name:'تحليل البيانات',assigned:'قياس الأداء'},
+      {name:'قناة الفرق',assigned:'التواصل الداخلي'},
+      {name:'نظام التذاكر',assigned:'التواصل الداخلي'},
+      {name:'لوحات المتابعة',assigned:'التواصل الداخلي'}
+    ]},
+    { id:8, name:'إدارة المخاطر والاستجابة', dept:'إدارة المخاطر والاستجابة', color:'#D97706', tasks:[
+      {name:'سجل المخاطر',assigned:'إدارة المخاطر'},
+      {name:'خطط التخفيف',assigned:'إدارة المخاطر'},
+      {name:'خطة الطوارئ',assigned:'إدارة المخاطر'},
+      {name:'فريق التدخل',assigned:'الاستجابة السريعة'},
+      {name:'سيناريو الأعطال',assigned:'الاستجابة السريعة'},
+      {name:'مسار التصعيد',assigned:'الاستجابة السريعة'}
+    ]},
+    { id:9, name:'تجربة الزائر', dept:'إدارة تجربة الزائر', color:'#8B5CF6', tasks:[
+      {name:'قبل الزيارة',assigned:'رحلة الزائر'},
+      {name:'خلال الزيارة',assigned:'رحلة الزائر'},
+      {name:'بعد الزيارة',assigned:'رحلة الزائر'},
+      {name:'التسجيل والتوجيه',assigned:'التميز التجريبي'},
+      {name:'التفاعل الإيجابي',assigned:'التميز التجريبي'},
+      {name:'الهدايا التذكارية',assigned:'التميز التجريبي'}
     ]}
   ];
 var wbsPhases = JSON.parse(localStorage.getItem('fintech_wbs_phases')||'null') || defaultWbsPhases;
@@ -4073,39 +4383,62 @@ var orgReportDefault = [
     {title:'الرؤية',content:'أن تكون فعالية "روافد الفنتك" فعالية جامعية رائدة في نشر الوعي بالتقنية المالية، وتمكين الشباب والشابات من فهم التحول الرقمي في القطاع المالي والمساهمة فيه بوعي وكفاءة.'},
     {title:'الرسالة',content:'تقديم محتوى معرفي وتطبيقي في مجال التقنية المالية عبر جلسات حوارية وتجارب تفاعلية يقودها مختصون، بهدف ربط المفاهيم النظرية بالواقع العملي، وتحفيز الطلبة على استكشاف الفرص المهنية والاستثمارية في قطاع الفنتك.'}
   ]},
-  {id:3,title:'نظرة عامة على الهيكل التنظيمي',icon:'🏛️',color:'#059669',content:'يتكون الهيكل التنظيمي لفعالية "روافد الفنتك" من خمس إدارات رئيسية تضم 12 فريق عمل متخصص، يعمل كل منها بتناغم لتحقيق أهداف الفعالية.',subs:[]},
+  {id:3,title:'نظرة عامة على الهيكل التنظيمي',icon:'🏛️',color:'#059669',content:'يتكون الهيكل التنظيمي لفعالية "روافد الفنتك" من تسع إدارات رئيسية تضم 28 فريق عمل متخصص، يعمل كل منها بتناغم لتحقيق أهداف الفعالية. تغطي الإدارات جميع جوانب المشروع من التخطيط والحوكمة إلى تجربة الزائر.',subs:[]},
   {id:4,title:'تسلسل العمل بين الإدارات والفرق',icon:'🔄',color:'#D97706',content:'يوضح هذا القسم كيف تترابط الإدارات والفرق مع بعضها، وما هو تسلسل العمل والتحويلات بينها.',subs:[
-    {title:'مسار استقطاب الشركات والرعاة',content:'فريق الشراكات والتعاونات يحدد الشركات المستهدفة ← فريق الرعايات يتواصل مع الجهات المحتملة ← عند الموافقة يتم التحويل لفريق تجربة الشركات ← التنسيق مع فريق التنظيم لتجهيز الموقع'},
-    {title:'مسار المحتوى والتسويق',content:'فريق الأبحاث يكتب المحتوى ← فريق التصميم يحوله لتصاميم ← فريق التسويق ينشره ← فريق التصوير يوفر الصور والفيديوهات'},
-    {title:'مسار تجربة الزائر يوم الفعالية',content:'فريق التخطيط يضع الخطة التشغيلية ← فريق التنظيم يجهز الموقع ← فريق تجربة الشركات يستقبل الممثلين ← فريق تجربة الزائر يستقبل الزوار'},
-    {title:'مسار الموارد البشرية',content:'فريق التخطيط يحدد الاحتياجات ← الاستقطاب والمتابعة ينشر الإعلانات ← توزيع المتطوعين على الفرق ← قياس الأداء والمتابعة'},
-    {title:'مسار التقارير والميزانية',content:'فريق إدارة الميزانية يعد الميزانية ← الأتمتة والمتابعة تتابع التنفيذ ← كل الفرق ترسل بياناتها ← فريق التقارير يعد التقرير الختامي'},
-    {title:'مسار الورش الحوارية',content:'التخطيط يحدد المواضيع ← الشراكات تنسق المتحدثين ← الأبحاث تعد الأسئلة ← التصميم يصمم العروض ← التسويق يروج ← التنظيم يجهز القاعة ← التصوير يوثق'},
-    {title:'نقاط التكامل الرئيسية',content:'١. العلاقات العامة تستقطب الشركات → التخطيط يجهز كل شيء\n٢. الإعلام كسلسلة: الأبحاث تكتب → التصميم يصمم → التسويق ينشر → التصوير يوثق\n٣. الموارد البشرية تغذي جميع الفرق بالمتطوعين\n٤. التقارير والمتابعة تستلم البيانات من الجميع\n٥. الورش الحوارية تجمع جهود أغلب الإدارات'}
+    {title:'مسار استقطاب الشركات والرعاة',content:'الشراكات الاستراتيجية تحدد الجهات المستهدفة ← إدارة الرعاة تتواصل وتصمم مزايا الرعاية ← إدارة الأركان والعارضين تجهز الأركان ← التصميم والتجهيز ينسق الموقع'},
+    {title:'مسار المحتوى والتسويق',content:'المحتوى والبرامج يعد المحاور والأجندة ← التصميم والتجهيز يصمم الهوية البصرية ← صناعة المحتوى تنشر ← التغطية والتصوير توثق'},
+    {title:'مسار تجربة الزائر يوم الفعالية',content:'إدارة المشروع تضع الخطة ← التصميم والتجهيز يجهز الموقع ← تجربة الزائر تستقبل الزوار ← التقنية والأتمتة تدير التسجيل والتتبع'},
+    {title:'مسار الموارد البشرية',content:'التخطيط يحدد هيكل الفريق وتوصيف الأدوار ← الاستقطاب والتدريب ينشر الإعلانات ويدرب المتطوعين ← التشغيل يوم الحدث يدير الفرق والحشود'},
+    {title:'مسار إدارة المخاطر',content:'إدارة المخاطر تعد سجل المخاطر وخطط التخفيف والطوارئ ← الاستجابة السريعة تجهز فريق التدخل وسيناريوهات الأعطال ومسار التصعيد'},
+    {title:'نقاط التكامل الرئيسية',content:'١. إدارة المشروع تشرف على الحوكمة والميزانية والمتابعة لجميع الإدارات\n٢. الشراكات والرعايات تستقطب الشركات → التصميم والتجهيز يجهز كل شيء\n٣. التسويق والإعلام كسلسلة: المحتوى → التصميم → النشر → التوثيق\n٤. الموارد البشرية تغذي جميع الفرق بالمتطوعين\n٥. التقنية والأتمتة تدعم جميع الإدارات بالأنظمة الرقمية\n٦. إدارة المخاطر تراقب وتستجيب عبر جميع المراحل\n٧. تجربة الزائر تجمع جهود أغلب الإدارات'}
   ]},
-  {id:5,title:'1. إدارة التخطيط والتنظيم',icon:'📋',color:'#2563EB',content:'تُعد العمود الفقري للفعالية، المسؤولة عن رسم الخطط التشغيلية والإشراف على الجوانب اللوجستية والتنظيمية. تضم أربعة فرق عمل:',subs:[
-    {title:'1.1 فريق التنظيم',content:'الإشراف الميداني على تنفيذ الفعالية يوم الحدث وضمان التنسيق بين جميع الفرق.',tasks:['تنظيم الموقع وترتيب الأركان والمساحات','الإشراف على سير الفعالية يوم الحدث','التنسيق بين الفرق المختلفة لضمان التكامل','إدارة الجدول الزمني للفعالية والجلسات','التأكد من جاهزية المعدات والتجهيزات التقنية','إدارة عمليات التسجيل والاستقبال']},
-    {title:'1.2 فريق التخطيط',content:'وضع الخطط الاستراتيجية والتشغيلية للفعالية.',tasks:['إعداد الخطة التشغيلية الشاملة للفعالية','تحديد الأهداف ومؤشرات الأداء الرئيسية (KPIs)','وضع الجدول الزمني التفصيلي لكل مرحلة','توزيع المهام على الإدارات والفرق','إدارة المخاطر ووضع خطط بديلة','التنسيق مع إدارة الجامعة والجهات ذات العلاقة']},
-    {title:'1.3 فريق تجربة الشركات',content:'ضمان تجربة مميزة للشركات والجهات المشاركة.',tasks:['التواصل المستمر مع الشركات المشاركة وتلبية احتياجاتها','تجهيز الأركان الخاصة بالشركات وفق متطلباتها','استقبال ممثلي الشركات وتوجيههم','جمع التغذية الراجعة من الشركات بعد الفعالية','توفير الدعم اللوجستي للشركات خلال الفعالية']},
-    {title:'1.4 فريق تجربة الزائر',content:'تصميم وتحسين تجربة الزوار والطلاب المشاركين.',tasks:['تصميم رحلة الزائر من لحظة الدخول حتى الخروج','إعداد اللافتات الإرشادية وخرائط التوجيه','إدارة نقاط الاستقبال والتسجيل','توفير تجربة تفاعلية مميزة للزوار','جمع استبيانات رضا الزوار وتحليل النتائج','التأكد من راحة الزوار وتوفير الخدمات المساندة']}
+  {id:5,title:'1. إدارة المشروع',icon:'🎯',color:'#0F172A',content:'الإدارة المركزية المسؤولة عن حوكمة المشروع والتخطيط الاستراتيجي والمالي والمتابعة. تضم ثلاثة فرق عمل:',subs:[
+    {title:'1.1 التخطيط والحوكمة',content:'وضع الأسس الاستراتيجية والتخطيطية للمشروع.',tasks:['كتابة ميثاق المشروع','تحديد النطاق','رسم الجدول الزمني','خطة الاتصالات','خطة المخاطر','مؤشرات الأداء KPIs']},
+    {title:'1.2 إدارة الميزانية',content:'الإشراف المالي وضبط الإنفاق.',tasks:['إعداد الميزانية التفصيلية','اعتماد الصرف','متابعة التكاليف','تقارير التكاليف']},
+    {title:'1.3 المتابعة والتقارير',content:'رصد التقدم وإعداد التقارير الدورية والختامية.',tasks:['الداشبورد','الاجتماعات الأسبوعية','التقرير المرحلي','التقرير الختامي']}
   ]},
-  {id:6,title:'2. إدارة الإعلام والمحتوى',icon:'📰',color:'#EC4899',content:'كل ما يتعلق بالهوية البصرية والمحتوى الإعلامي والتسويقي. تضم أربعة فرق عمل:',subs:[
-    {title:'2.1 فريق التصميم',content:'المسؤول عن الهوية البصرية وجميع المخرجات التصميمية.',tasks:['تصميم الهوية البصرية الكاملة للفعالية','تصميم المنشورات والمواد التسويقية لوسائل التواصل','تصميم اللافتات والبنرات والرول أب','تصميم ملفات العروض التقديمية والتقارير','تصميم الشهادات والدعوات','الحفاظ على اتساق الهوية البصرية في جميع المخرجات']},
-    {title:'2.2 فريق التسويق',content:'الترويج للفعالية وبناء الوعي لدى الجمهور المستهدف.',tasks:['إعداد الخطة التسويقية الشاملة','إدارة حسابات التواصل الاجتماعي والحملات الإعلانية','التسويق داخل الجامعة عبر الملصقات والشاشات','التنسيق مع المؤثرين والجهات الإعلامية','قياس مدى الوصول والتفاعل وتحليل الأداء التسويقي']},
-    {title:'2.3 فريق التصوير',content:'توثيق الفعالية بشكل احترافي.',tasks:['التصوير الفوتوغرافي الاحترافي للفعالية','تصوير الفيديو للجلسات والأركان','إعداد محتوى مرئي للنشر الفوري أثناء الفعالية','إنتاج فيديو توثيقي وملخص بعد الفعالية','توثيق لحظات التكريم والشراكات']},
-    {title:'2.4 فريق الأبحاث وكتابة المحتوى',content:'إعداد المحتوى المعرفي والبحثي.',tasks:['إعداد المحتوى التعريفي بالتقنية المالية','كتابة النصوص التسويقية والإعلامية','إعداد الأسئلة للجلسات الحوارية','إعداد التقارير والملفات التعريفية','البحث عن أحدث الاتجاهات في مجال الفنتك','مراجعة وتدقيق جميع المحتويات قبل النشر']}
+  {id:6,title:'2. الشراكات والرعايات',icon:'🤝',color:'#059669',content:'بناء وإدارة العلاقات مع الجهات الخارجية والشركاء والرعاة والعارضين. تضم ثلاثة فرق:',subs:[
+    {title:'2.1 الشراكات الاستراتيجية',content:'بناء الشراكات مع الجهات الرئيسية.',tasks:['قائمة الجهات المستهدفة','إعداد باقات الشراكة','التواصل الرسمي','توقيع الاتفاقيات']},
+    {title:'2.2 إدارة الرعاة',content:'استقطاب الرعاة وإدارة علاقاتهم.',tasks:['تصميم مزايا الرعاية','متابعة التزامات الرعاة','تحقيق متطلبات الرعاة','تقرير عائد الرعاية']},
+    {title:'2.3 إدارة الأركان والعارضين',content:'تنظيم مشاركة العارضين في المعرض.',tasks:['دليل العارض','توزيع الأركان','المتطلبات التقنية والفنية','دعم يوم الحدث']}
   ]},
-  {id:7,title:'3. إدارة العلاقات العامة',icon:'🤝',color:'#14B8A6',content:'بناء وإدارة العلاقات مع الجهات الخارجية والشركاء والرعاة. تضم فريقين:',subs:[
-    {title:'3.1 فريق الشراكات الإستراتيجية والتعاونات',content:'بناء الشراكات مع الجهات الرئيسية في قطاع التقنية المالية.',tasks:['تحديد الجهات الاستراتيجية المستهدفة','إعداد مقترحات الشراكة وحزم المزايا','التفاوض وتوقيع اتفاقيات الشراكة','متابعة التزامات الشركاء وتنفيذ البنود','التنسيق مع الأندية الطلابية والمبادرات المجتمعية','التنسيق مع المتحدثين والخبراء المدعوين','إدارة العلاقات مع الجهات الأكاديمية','بناء علاقات مستدامة للفعاليات المستقبلية']},
-    {title:'3.2 فريق الرعايات',content:'استقطاب الرعاة والداعمين الماليين للفعالية.',tasks:['إعداد حزم الرعاية بمستويات مختلفة (ذهبية، فضية، برونزية)','التواصل مع الجهات المحتملة للرعاية','تنفيذ التزامات الرعاية (شعارات، ذكر إعلامي، أركان)','إعداد تقارير ما بعد الفعالية للرعاة','بناء قاعدة بيانات للرعاة المحتملين']}
+  {id:7,title:'3. التصميم والتجهيز',icon:'🎨',color:'#7C3AED',content:'كل ما يتعلق بالهوية البصرية وتصميم المعرض والتجهيزات اللوجستية. تضم أربعة فرق عمل:',subs:[
+    {title:'3.1 الهوية البصرية',content:'تصميم الهوية البصرية الكاملة للفعالية.',tasks:['شعار المعرض','ملف الهوية','تصاميم الطباعة','تصاميم حسابات التواصل والمنشورات']},
+    {title:'3.2 تصميم تجربة المعرض',content:'تخطيط المساحات وتوزيع العناصر.',tasks:['المخطط العام للبهو','توزيع الأركان الخمسة','مسارات الزوار','نقاط التسجيل']},
+    {title:'3.3 تجهيز وتصميم البهو',content:'التصميم المادي لمساحة المعرض.',tasks:['التصميم البصري','اللوحات الإرشادية إلى المعرض وداخله','منصة الجلسات','منطقة الورش']},
+    {title:'3.4 التجهيزات اللوجستية',content:'توفير المعدات والتجهيزات التقنية.',tasks:['منصات وستاندات','شاشات العرض','الصوتيات','الإضاءة']}
   ]},
-  {id:8,title:'4. إدارة التقارير والمتابعة والميزانية',icon:'📊',color:'#D97706',content:'الجهاز الرقابي والتحليلي والمالي للفعالية. إدارة موحدة:',subs:[
-    {title:'4.1 إدارة التقارير والمتابعة والميزانية',content:'جميع مهام التقارير والمتابعة والميزانية والأتمتة.',tasks:['إعداد تقارير التقدم الدورية للإدارة','توثيق الإنجازات وإعداد التقرير الختامي الشامل','تحليل البيانات والإحصائيات وإعداد تقارير الشركاء والرعاة','إعداد الميزانية التقديرية ومتابعة المصروفات وضبط الإنفاق','إدارة المشتريات والعقود المالية والتقارير المالية الختامية','إعداد أنظمة متابعة المهام وأتمتة عمليات التسجيل والحضور','إنشاء لوحات متابعة (Dashboards) وتطوير أدوات رقمية','التأكد من الشفافية المالية والتوثيق السليم']}
+  {id:8,title:'4. المحتوى والبرامج',icon:'📚',color:'#2563EB',content:'إعداد المحتوى المعرفي والبرامج التفاعلية للفعالية. تضم أربعة فرق عمل:',subs:[
+    {title:'4.1 الجلسات الحوارية',content:'تنظيم الجلسات الحوارية مع الخبراء.',tasks:['تحديد المحاور','استقطاب المتحدثين','إعداد الأجندة','إدارة الجلسات']},
+    {title:'4.2 ورش العمل',content:'إعداد وتنفيذ ورش العمل التدريبية.',tasks:['تحديد الموضوعات','تجهيز المدربين','المواد التدريبية','إدارة التسجيل']},
+    {title:'4.3 التجارب التفاعلية',content:'تصميم تجارب تفاعلية مبتكرة للزوار.',tasks:['تصميم التجارب','تطبيقات فنتك تفاعلية','التجهيز الفني للتجربة','قياس التفاعل']},
+    {title:'4.4 الأركان',content:'إدارة الأركان التعليمية الخمسة.',tasks:['ركن ما وراء رحلة العميل','ركن الكواليس','ركن المخاطر والاحتيال','ركن مسارات وظائف الفنتك','ركن منتجات الفنتك']}
   ]},
-  {id:9,title:'5. إدارة الموارد البشرية',icon:'👥',color:'#8B5CF6',content:'إدارة الكوادر البشرية من الاستقطاب إلى قياس الأداء. إدارة موحدة:',subs:[
-    {title:'5.1 إدارة الموارد البشرية',content:'جميع مهام الاستقطاب والمتابعة وقياس الأداء.',tasks:['نشر إعلانات التطوع واستقبال الطلبات','فرز المتقدمين وتوزيعهم على الفرق المناسبة','إعداد برامج التهيئة والتدريب للمتطوعين','متابعة التزام المتطوعين وحضورهم','وضع معايير تقييم الأداء وإجراء تقييمات دورية','إدارة قنوات التواصل الداخلي وتنظيم اجتماعات دورية','إعداد شهادات التطوع وخطابات الشكر','حل الخلافات وتعزيز روح الفريق']}
+  {id:9,title:'5. التسويق والإعلام',icon:'📢',color:'#EC4899',content:'الترويج للفعالية والتغطية الإعلامية والتصويرية. تضم أربعة فرق عمل:',subs:[
+    {title:'5.1 الخطة التسويقية',content:'وضع الاستراتيجية التسويقية الشاملة.',tasks:['تحديد الفئة المستهدفة','خطة القنوات','المزيج التسويقي','خطة الجذب']},
+    {title:'5.2 صناعة المحتوى',content:'إنتاج المحتوى التسويقي والإعلامي.',tasks:['كتابة المحتوى','منشورات السوشل','الإيميلات','التغطية المباشرة']},
+    {title:'5.3 العلاقات العامة',content:'إدارة العلاقات الإعلامية والدعوات الرسمية.',tasks:['الدعوات الرسمية','التنسيق الإعلامي','كبار الشخصيات','النشر الصحفي']},
+    {title:'5.4 التغطية والتصوير',content:'التوثيق المرئي الاحترافي للفعالية.',tasks:['تصوير فوتوغرافي','تصوير فيديو','مقابلات','فيديو ختامي']}
   ]},
-  {id:10,title:'الخاتمة',icon:'✨',color:'#0F172A',content:'يعكس الهيكل التنظيمي لفعالية "روافد الفنتك" مستوى عالياً من التنظيم والاحترافية، حيث تم توزيع المهام بشكل دقيق على خمس إدارات رئيسية تضم 12 فريق عمل. هذا التوزيع يضمن التكامل بين جميع الجوانب، مما يضمن تقديم تجربة مميزة للزوار والشركاء على حد سواء.',subs:[]}
+  {id:10,title:'6. إدارة الموارد البشرية',icon:'👥',color:'#DC2626',content:'إدارة الكوادر البشرية من التخطيط إلى التشغيل يوم الحدث. تضم ثلاثة فرق:',subs:[
+    {title:'6.1 التخطيط',content:'التخطيط لهيكل الفريق والأدوار.',tasks:['هيكل الفريق','توصيف الأدوار','خطة المناوبات']},
+    {title:'6.2 الاستقطاب والتدريب',content:'استقطاب وتدريب المتطوعين.',tasks:['اختيار المتطوعين','التدريب التشغيلي','دليل المتطوع']},
+    {title:'6.3 التشغيل يوم الحدث',content:'إدارة الفرق والحشود يوم الفعالية.',tasks:['إدارة الفرق','إدارة الحشود','الدعم السريع']}
+  ]},
+  {id:11,title:'7. التقنية والأتمتة',icon:'💻',color:'#14B8A6',content:'الأنظمة الرقمية والتقنية الداعمة للفعالية. تضم ثلاثة فرق:',subs:[
+    {title:'7.1 أنظمة التسجيل',content:'إدارة منصات التسجيل والحضور.',tasks:['منصة التسجيل','QR للدخول','قائمة الحضور']},
+    {title:'7.2 قياس الأداء',content:'تتبع وقياس أداء الفعالية.',tasks:['تتبع الزوار','استبيان الرضا','تحليل البيانات']},
+    {title:'7.3 التواصل الداخلي',content:'أنظمة التواصل والمتابعة بين الفرق.',tasks:['قناة الفرق','نظام التذاكر','لوحات المتابعة']}
+  ]},
+  {id:12,title:'8. إدارة المخاطر والاستجابة',icon:'⚠️',color:'#D97706',content:'إدارة المخاطر والاستجابة السريعة للطوارئ. تضم فريقين:',subs:[
+    {title:'8.1 إدارة المخاطر',content:'تحديد وتقييم المخاطر ووضع خطط التخفيف.',tasks:['سجل المخاطر','خطط التخفيف','خطة الطوارئ']},
+    {title:'8.2 الاستجابة السريعة',content:'الاستجابة الفورية للأعطال والطوارئ.',tasks:['فريق التدخل','سيناريو الأعطال','مسار التصعيد']}
+  ]},
+  {id:13,title:'9. تجربة الزائر',icon:'🌟',color:'#8B5CF6',content:'تصميم وتحسين تجربة الزائر في جميع مراحل الفعالية. تضم فريقين:',subs:[
+    {title:'9.1 رحلة الزائر',content:'تصميم رحلة الزائر الشاملة.',tasks:['قبل الزيارة','خلال الزيارة','بعد الزيارة']},
+    {title:'9.2 التميز التجريبي',content:'ضمان تجربة مميزة واستثنائية للزوار.',tasks:['التسجيل والتوجيه','التفاعل الإيجابي','الهدايا التذكارية']}
+  ]},
+  {id:14,title:'الخاتمة',icon:'✨',color:'#0F172A',content:'يعكس الهيكل التنظيمي لفعالية "روافد الفنتك" مستوى عالياً من التنظيم والاحترافية، حيث تم توزيع المهام بشكل دقيق على تسع إدارات رئيسية تضم 28 فريق عمل. هذا التوزيع يضمن التكامل بين جميع الجوانب — من التخطيط والحوكمة إلى تجربة الزائر، مروراً بإدارة المخاطر والتقنية والأتمتة — مما يضمن تقديم تجربة مميزة للزوار والشركاء على حد سواء.',subs:[]}
 ];
 
 var orgReportSections = JSON.parse(localStorage.getItem('fintech_org_report')||'null') || orgReportDefault;
@@ -4473,6 +4806,7 @@ function closeBug(id) {
 // ═══════════════════════════════════════════════════════════════
 function saveSession() {
   try {
+    // Save to localStorage as cache
     if(currentUser) localStorage.setItem('fintech_session', JSON.stringify(currentUser));
     localStorage.setItem('fintech_tasks', JSON.stringify(tasks));
     localStorage.setItem('fintech_members', JSON.stringify(members));
@@ -4480,26 +4814,10 @@ function saveSession() {
     localStorage.setItem('fintech_warnings', JSON.stringify(warnings));
     localStorage.setItem('fintech_bugs', JSON.stringify(bugReports));
     try {
-      // Strip large base64 data before saving to localStorage (5MB limit on mobile!)
-      var liteReports = reports.map(function(r) {
-        var c = Object.assign({}, r);
-        if(c.file && c.file.data) c.file = {name:c.file.name, size:c.file.size, type:c.file.type, fileId:c.file.fileId||null, hasLocal:true};
-        if(c.images) c.images = c.images.map(function(img) {
-          if(img && img.data) return {name:img.name, size:img.size, fileId:img.fileId||null, hasLocal:true};
-          return img;
-        });
-        return c;
-      });
-      var liteApprovals = approvals.map(function(a) {
-        var c = Object.assign({}, a);
-        if(c.file && c.file.data) c.file = {name:c.file.name, size:c.file.size, type:c.file.type, fileId:c.file.fileId||null, hasLocal:true};
-        if(c.responseFile && c.responseFile.data) c.responseFile = {name:c.responseFile.name, size:c.responseFile.size, type:c.responseFile.type, fileId:c.responseFile.fileId||null, hasLocal:true};
-        return c;
-      });
-      localStorage.setItem('fintech_reports', JSON.stringify(liteReports));
-      localStorage.setItem('fintech_approvals', JSON.stringify(liteApprovals));
-    } catch(e) { console.warn('localStorage reports/approvals save failed:', e); }
-  } catch(e) { console.warn('localStorage save failed:', e); }
+      localStorage.setItem('fintech_reports', JSON.stringify(reports));
+      localStorage.setItem('fintech_approvals', JSON.stringify(approvals));
+    } catch(e) {}
+  } catch(e) {}
 
   // Save to Firebase (async)
   _suppressSync = true;
@@ -4562,8 +4880,8 @@ const _origAddTask = addTask;
 addTask = function() { _origAddTask(); saveSession(); };
 // addReport, handleApproval, addApproval are ASYNC — they call saveSession() after upload completes
 // DO NOT wrap them with extra saveSession() — it causes race conditions
-const _origPublishReport = publishReport;
-publishReport = function(id) { _origPublishReport(id); saveSession(); };
+const _origConfirmPublishReport = confirmPublishReport;
+confirmPublishReport = function(id) { _origConfirmPublishReport(id); saveSession(); };
 const _origAddAnn = addAnn;
 addAnn = function() { _origAddAnn(); saveSession(); };
 const _origAddMember = addMember;
