@@ -2316,17 +2316,16 @@ function buildReturnedBanner(returnedReports, count) {
 // ═══════════════════════════════════════════════════════════════
 function renderReports() {
   var visibleReports = reports.filter(function(r) {
-    // Author and admin always see their reports
     if(currentUser.role==='admin') return true;
     if(String(r.author)===String(currentUser.id)) return true;
-    // Only published reports are visible to others
     if(r.status!=='published') return false;
-    // Audience filter
     var aud = r.audience || 'all';
     if(aud==='all') return true;
-    if(aud==='supervisors' && (currentUser.role==='supervisor' || currentUser.role==='admin')) return true;
-    if(aud==='admins' && currentUser.role==='admin') return true;
+    if(aud==='supervisors' && currentUser.role==='supervisor') return true;
+    if(aud==='admins') return false;
     if(aud==='members' && currentUser.role==='member') return true;
+    if(aud==='admins_members' && currentUser.role==='member') return true;
+    if(aud==='admins_supervisors' && currentUser.role==='supervisor') return true;
     return false;
   });
   var pendingForAdmin = reports.filter(function(r){return r.status==='pending_approval'}).length;
@@ -2343,10 +2342,11 @@ function renderReports() {
       visibleReports.slice().sort((a,b)=>b.id-a.id).map((r,i)=>{
         const author=getMember(r.author), d=getDept(r.dept);
         const typeLabel = r.type==='progress'?'📊 تقدم':r.type==='financial'?'💰 مالي':'📋 عام';
-        const audLabel = r.audience==='supervisors'?'🎓 للمشرفين':r.audience==='admins'?'👑 للمدراء':r.audience==='members'?'👤 للأعضاء':'👥 للكل';
-        const audColor = r.audience==='supervisors'?'#2563EB':r.audience==='admins'?'#7C3AED':r.audience==='members'?'#64748B':'#059669';
+        const audLabels = {all:'👥 للكل',admins_members:'👑👤 مدراء وأعضاء',admins_supervisors:'👑🎓 مدراء ومشرفين',supervisors:'🎓 للمشرفين',admins:'👑 للمدراء',members:'👤 للأعضاء'};
+        const audColors = {all:'#059669',admins_members:'#D97706',admins_supervisors:'#7C3AED',supervisors:'#2563EB',admins:'#7C3AED',members:'#64748B'};
+        const audLabel = audLabels[r.audience] || audLabels.all;
+        const audColor = audColors[r.audience] || audColors.all;
         const statusInfo = r.status==='published'?{l:'منشور ✅',c:'#059669',bg:'#ECFDF5'}:r.status==='pending_approval'?{l:'بانتظار الموافقة ⏳',c:'#D97706',bg:'#FEF3C7'}:r.status==='returned'?{l:'مُرتجع ↩️',c:'#DC2626',bg:'#FEF2F2'}:{l:'مسودة 📝',c:'#64748B',bg:'#F1F5F9'};
-        const comments = r.comments || [];
         return `<div class="report-card animate-in" style="animation-delay:${0.05+i*0.04}s">
           <div class="flex-between">
             <div style="flex:1">
@@ -2360,8 +2360,11 @@ function renderReports() {
               ${r.images&&r.images.length>0?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${r.images.map(function(img,imgIdx){var src=img.data||img.url||''; return src ? '<img src="'+src+'" onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid var(--slate-200);cursor:pointer;transition:all 0.2s" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'\'">':'<div onclick="viewReportImage('+r.id+','+imgIdx+')" style="width:80px;height:80px;display:flex;align-items:center;justify-content:center;font-size:28px;background:#F1F5F9;border-radius:8px;border:2px solid #E2E8F0;cursor:pointer" title="اضغط لتحميل الصورة">🖼️</div>'}).join('')}</div>`:''}
               <div style="font-size:12px;color:var(--slate-400);margin-top:8px">✍️ ${(author&&author.name)||''} — 📅 ${r.date}</div>
               ${r.rejectReason?`<div style="margin-top:8px;padding:10px 14px;background:#FEF2F2;border-radius:8px;border:1px solid #FECACA"><span style="font-size:12px;color:#DC2626;font-weight:700">↩️ سبب الإرجاع:</span> <span style="font-size:12px;color:#991B1B">${r.rejectReason}</span></div>`:''}
-              ${comments.length>0?`<div style="margin-top:12px;border-top:1px solid var(--slate-200);padding-top:12px"><div style="font-size:12px;font-weight:700;color:var(--slate-500);margin-bottom:8px">💬 التعليقات (${comments.length})</div>${comments.slice(-3).map(function(c){var cm=getMember(c.authorId);return '<div style="padding:10px 14px;border-radius:10px;background:var(--slate-50);border-right:3px solid var(--gold);margin-bottom:6px"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><strong style="font-size:12px;color:var(--gold-dark)">'+(cm?cm.name:'مجهول')+'</strong><span style="font-size:10px;color:var(--slate-400)">'+c.date+'</span></div><div style="font-size:13px;color:var(--slate-700);line-height:1.7">'+c.text+'</div></div>'}).join('')}${comments.length>3?'<div style="font-size:11px;color:var(--slate-400);text-align:center;cursor:pointer" onclick="showAllComments('+r.id+')">عرض جميع التعليقات ('+comments.length+')</div>':''}</div>`:''}
-              <div style="margin-top:10px"><button class="btn btn-sm" style="background:var(--slate-50);color:var(--slate-600);border:1px solid var(--slate-200)" onclick="showAddCommentModal(${r.id})">💬 أضف تعليق${comments.length>0?' ('+comments.length+')':''}</button></div>
+              <div style="margin-top:12px;border-top:1px solid #E2E8F0;padding-top:10px">
+                <div style="font-size:12px;font-weight:700;color:var(--slate-600);margin-bottom:8px">💬 التعليقات ${r.comments&&r.comments.length?'('+r.comments.length+')':''}</div>
+                ${r.comments&&r.comments.length?r.comments.map(function(c){var cm=getMember(c.author);return '<div style="padding:8px 12px;background:#F8FAFC;border-radius:8px;margin-bottom:6px;border-right:3px solid var(--gold)"><div style="font-size:12px;font-weight:700;color:var(--navy)">'+(cm&&cm.name||'')+'<span style="font-weight:400;color:var(--slate-400);margin-right:8px">'+c.date+'</span></div><div style="font-size:13px;color:var(--slate-700);margin-top:4px;line-height:1.6">'+c.text+'</div></div>'}).join(''):'<div style="font-size:12px;color:var(--slate-400)">لا توجد تعليقات بعد</div>'}
+                <div style="display:flex;gap:8px;margin-top:8px"><input class="form-input" id="rptComment${r.id}" placeholder="أضف تعليقاً..." style="flex:1;padding:8px 12px;font-size:12px"><button class="btn btn-sm" style="background:var(--gold);color:#fff;white-space:nowrap" onclick="addReportComment(${r.id})">إرسال 💬</button></div>
+              </div>
             </div>
             <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-start;flex-shrink:0">
               ${r.status==='pending_approval'&&currentUser.role==='admin'?`
@@ -2376,29 +2379,26 @@ function renderReports() {
       }).join('')}`;
 }
 
+var audienceDropdownHtml = function(selectedVal) {
+  var v = selectedVal || 'all';
+  var opts = [
+    {val:'all',label:'👥 الكل (المدراء + المشرفين + الأعضاء)'},
+    {val:'admins_members',label:'👑👤 المدراء والأعضاء (بدون المشرف)'},
+    {val:'admins_supervisors',label:'👑🎓 المدراء والمشرفين (بدون الأعضاء)'},
+    {val:'supervisors',label:'🎓 المشرفين فقط'},
+    {val:'admins',label:'👑 المدراء فقط'},
+    {val:'members',label:'👤 الأعضاء فقط'}
+  ];
+  return '<select class="form-select" id="publishAudience">' + opts.map(function(o){return '<option value="'+o.val+'"'+(v===o.val?' selected':'')+'>'+o.label+'</option>'}).join('') + '</select>';
+};
+
 function publishReport(id) {
   var rpt = reports.find(function(r){return r.id===id});
   if(!rpt) return;
-  var currentAud = rpt.audience || 'all';
-  showModal('📤 نشر التقرير — اختر الفئة المستهدفة',
+  showModal('📤 نشر التقرير',
     '<div style="margin-bottom:16px;padding:12px;background:var(--slate-50);border-radius:10px;text-align:center"><div style="font-weight:700">'+rpt.title+'</div></div>' +
-    '<div class="form-group"><label class="form-label">🎯 من يشوف التقرير بعد النشر؟</label>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-    '<div onclick="selectPublishAudience(\'all\')" id="pub_all" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='all'?'var(--gold)':'var(--slate-200)')+';background:'+(currentAud==='all'?'#FEF3C7':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👥</div><div style="font-size:11px;font-weight:700;margin-top:4px">الكل</div></div>' +
-    '<div onclick="selectPublishAudience(\'supervisors\')" id="pub_supervisors" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='supervisors'?'var(--blue)':'var(--slate-200)')+';background:'+(currentAud==='supervisors'?'#EFF6FF':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">🎓</div><div style="font-size:11px;font-weight:700;margin-top:4px">المشرفين</div></div>' +
-    '<div onclick="selectPublishAudience(\'admins\')" id="pub_admins" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='admins'?'var(--purple)':'var(--slate-200)')+';background:'+(currentAud==='admins'?'#F3E8FF':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👑</div><div style="font-size:11px;font-weight:700;margin-top:4px">المدراء</div></div>' +
-    '<div onclick="selectPublishAudience(\'members\')" id="pub_members" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='members'?'var(--slate-500)':'var(--slate-200)')+';background:'+(currentAud==='members'?'#F1F5F9':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👤</div><div style="font-size:11px;font-weight:700;margin-top:4px">الأعضاء</div></div>' +
-    '</div><input type="hidden" id="publishAudience" value="'+currentAud+'"></div>' +
+    '<div class="form-group"><label class="form-label">🎯 من يشوف التقرير بعد النشر؟</label>' + audienceDropdownHtml(rpt.audience) + '</div>' +
     '<button class="btn btn-lg btn-block" style="background:linear-gradient(135deg,#059669,#047857);color:#fff" onclick="confirmPublishReport('+id+')">📤 نشر التقرير</button>');
-}
-
-function selectPublishAudience(val) {
-  document.getElementById('publishAudience').value = val;
-  var opts = {all:{color:'var(--gold)',bg:'#FEF3C7'},supervisors:{color:'var(--blue)',bg:'#EFF6FF'},admins:{color:'var(--purple)',bg:'#F3E8FF'},members:{color:'var(--slate-500)',bg:'#F1F5F9'}};
-  ['all','supervisors','admins','members'].forEach(function(k) {
-    var el = document.getElementById('pub_'+k);
-    if(el) { el.style.borderColor = k===val ? opts[k].color : 'var(--slate-200)'; el.style.background = k===val ? opts[k].bg : '#fff'; }
-  });
 }
 
 function confirmPublishReport(id) {
@@ -2411,16 +2411,9 @@ function confirmPublishReport(id) {
 function approveReport(id) {
   var rpt = reports.find(function(r){return r.id===id});
   if(!rpt) return;
-  var currentAud = rpt.audience || 'all';
-  showModal('✅ موافقة ونشر — اختر الفئة المستهدفة',
+  showModal('✅ موافقة ونشر',
     '<div style="margin-bottom:16px;padding:12px;background:var(--slate-50);border-radius:10px;text-align:center"><div style="font-weight:700">'+rpt.title+'</div></div>' +
-    '<div class="form-group"><label class="form-label">🎯 من يشوف التقرير بعد النشر؟</label>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-    '<div onclick="selectPublishAudience(\'all\')" id="pub_all" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='all'?'var(--gold)':'var(--slate-200)')+';background:'+(currentAud==='all'?'#FEF3C7':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👥</div><div style="font-size:11px;font-weight:700;margin-top:4px">الكل</div></div>' +
-    '<div onclick="selectPublishAudience(\'supervisors\')" id="pub_supervisors" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='supervisors'?'var(--blue)':'var(--slate-200)')+';background:'+(currentAud==='supervisors'?'#EFF6FF':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">🎓</div><div style="font-size:11px;font-weight:700;margin-top:4px">المشرفين</div></div>' +
-    '<div onclick="selectPublishAudience(\'admins\')" id="pub_admins" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='admins'?'var(--purple)':'var(--slate-200)')+';background:'+(currentAud==='admins'?'#F3E8FF':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👑</div><div style="font-size:11px;font-weight:700;margin-top:4px">المدراء</div></div>' +
-    '<div onclick="selectPublishAudience(\'members\')" id="pub_members" style="flex:1;min-width:70px;text-align:center;padding:12px 6px;border-radius:12px;border:2px solid '+(currentAud==='members'?'var(--slate-500)':'var(--slate-200)')+';background:'+(currentAud==='members'?'#F1F5F9':'#fff')+';cursor:pointer;transition:all 0.2s"><div style="font-size:20px">👤</div><div style="font-size:11px;font-weight:700;margin-top:4px">الأعضاء</div></div>' +
-    '</div><input type="hidden" id="publishAudience" value="'+currentAud+'"></div>' +
+    '<div class="form-group"><label class="form-label">🎯 من يشوف التقرير بعد النشر؟</label>' + audienceDropdownHtml(rpt.audience) + '</div>' +
     '<button class="btn btn-lg btn-block" style="background:linear-gradient(135deg,#059669,#047857);color:#fff" onclick="confirmApproveReport('+id+')">✅ موافقة ونشر</button>');
 }
 
@@ -2544,63 +2537,18 @@ function confirmDeleteReport(id) {
   hideModal(); renderReports(); saveSession();
 }
 
-function showAddCommentModal(reportId) {
-  var r = reports.find(function(rp){return rp.id===reportId});
-  if(!r) return;
-  showModal('💬 إضافة تعليق على: ' + r.title,
-    '<div class="form-group"><label class="form-label">التعليق</label><textarea class="form-textarea" id="commentText" placeholder="اكتب تعليقك هنا..." style="min-height:100px"></textarea></div>' +
-    '<button class="btn btn-primary btn-lg btn-block" onclick="addReportComment('+reportId+')">💬 إرسال التعليق</button>');
-}
-
-function addReportComment(reportId) {
-  var text = document.getElementById('commentText').value.trim();
-  if(!text) { showToast('⚠️ يرجى كتابة التعليق','#DC2626'); return; }
-  reports = reports.map(function(r) {
-    if(r.id===reportId) {
-      var comments = r.comments ? r.comments.slice() : [];
-      comments.push({id:Date.now(), authorId:currentUser.id, text:text, date:today()});
-      return Object.assign({}, r, {comments:comments});
-    }
-    return r;
-  });
-  hideModal(); renderReports(); saveSession();
-  showToast('💬 تم إضافة التعليق بنجاح','#059669');
-}
-
-function showAllComments(reportId) {
-  var r = reports.find(function(rp){return rp.id===reportId});
-  if(!r || !r.comments || r.comments.length===0) return;
-  var commentsHtml = r.comments.map(function(c) {
-    var cm = getMember(c.authorId);
-    var isOwn = String(c.authorId)===String(currentUser.id);
-    var canDelete = currentUser.role==='admin' || isOwn;
-    return '<div style="padding:12px 16px;border-radius:12px;background:var(--slate-50);border-right:3px solid '+(isOwn?'var(--gold)':'var(--blue)')+';margin-bottom:8px">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-      '<strong style="font-size:13px;color:'+(isOwn?'var(--gold-dark)':'var(--blue)')+'">'+(cm?cm.name:'مجهول')+'</strong>' +
-      '<div style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:var(--slate-400)">'+c.date+'</span>' +
-      (canDelete?'<button onclick="deleteReportComment('+reportId+','+c.id+')" style="background:none;border:none;cursor:pointer;font-size:12px;color:#DC2626;padding:2px" title="حذف">🗑️</button>':'') +
-      '</div></div>' +
-      '<div style="font-size:13px;color:var(--slate-700);line-height:1.8">'+c.text+'</div></div>';
-  }).join('');
-  showModal('💬 جميع التعليقات — ' + r.title + ' (' + r.comments.length + ')',
-    '<div style="max-height:400px;overflow-y:auto;margin-bottom:16px">' + commentsHtml + '</div>' +
-    '<button class="btn btn-primary btn-lg btn-block" onclick="hideModal();showAddCommentModal('+reportId+')">💬 أضف تعليق جديد</button>');
-}
-
-function deleteReportComment(reportId, commentId) {
-  reports = reports.map(function(r) {
-    if(r.id===reportId) {
-      var comments = (r.comments||[]).filter(function(c){return c.id!==commentId});
-      return Object.assign({}, r, {comments:comments});
-    }
-    return r;
-  });
+function addReportComment(id) {
+  var input = document.getElementById('rptComment'+id);
+  if(!input) return;
+  var text = input.value.trim();
+  if(!text) { showToast('⚠️ اكتب تعليقاً أولاً','#DC2626'); return; }
+  var rpt = reports.find(function(r){return r.id===id});
+  if(!rpt) return;
+  if(!rpt.comments) rpt.comments = [];
+  rpt.comments.push({author:currentUser.id, text:text, date:today()+' '+new Date().toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'})});
+  input.value = '';
   renderReports(); saveSession();
-  showToast('🗑️ تم حذف التعليق','#DC2626');
-  // Re-open comments modal if it was open
-  var rpt = reports.find(function(rp){return rp.id===reportId});
-  if(rpt && rpt.comments && rpt.comments.length>0) showAllComments(reportId);
-  else hideModal();
+  showToast('💬 تم إضافة التعليق','#059669');
 }
 
 function deleteApproval(id) {
@@ -2624,21 +2572,14 @@ function showAddReportModal() {
     </select></div>
     <div class="form-group">
       <label class="form-label">🎯 الفئة المستهدفة (من يشوف التقرير بعد النشر)</label>
-      <div style="display:flex;gap:8px;flex-wrap:wrap" id="audienceSelector">
-        <div onclick="selectAudience('all')" id="aud_all" style="flex:1;min-width:80px;text-align:center;padding:12px 8px;border-radius:12px;border:2px solid var(--gold);background:#FEF3C7;cursor:pointer;transition:all 0.2s">
-          <div style="font-size:22px">👥</div><div style="font-size:12px;font-weight:700;color:var(--gold-dark);margin-top:4px">الكل</div>
-        </div>
-        <div onclick="selectAudience('supervisors')" id="aud_supervisors" style="flex:1;min-width:80px;text-align:center;padding:12px 8px;border-radius:12px;border:2px solid var(--slate-200);background:#fff;cursor:pointer;transition:all 0.2s">
-          <div style="font-size:22px">🎓</div><div style="font-size:12px;font-weight:700;color:var(--slate-500);margin-top:4px">المشرفين</div>
-        </div>
-        <div onclick="selectAudience('admins')" id="aud_admins" style="flex:1;min-width:80px;text-align:center;padding:12px 8px;border-radius:12px;border:2px solid var(--slate-200);background:#fff;cursor:pointer;transition:all 0.2s">
-          <div style="font-size:22px">👑</div><div style="font-size:12px;font-weight:700;color:var(--slate-500);margin-top:4px">المدراء فقط</div>
-        </div>
-        <div onclick="selectAudience('members')" id="aud_members" style="flex:1;min-width:80px;text-align:center;padding:12px 8px;border-radius:12px;border:2px solid var(--slate-200);background:#fff;cursor:pointer;transition:all 0.2s">
-          <div style="font-size:22px">👤</div><div style="font-size:12px;font-weight:700;color:var(--slate-500);margin-top:4px">الأعضاء</div>
-        </div>
-      </div>
-      <input type="hidden" id="reportAudience" value="all">
+      <select class="form-select" id="reportAudience">
+        <option value="all">👥 الكل (المدراء + المشرفين + الأعضاء)</option>
+        <option value="admins_members">👑👤 المدراء والأعضاء (بدون المشرف)</option>
+        <option value="admins_supervisors">👑🎓 المدراء والمشرفين (بدون الأعضاء)</option>
+        <option value="supervisors">🎓 المشرفين فقط</option>
+        <option value="admins">👑 المدراء فقط</option>
+        <option value="members">👤 الأعضاء فقط</option>
+      </select>
     </div>
     <div class="form-group"><label class="form-label">المحتوى (اختياري في حال إرفاق ملف)</label><textarea class="form-textarea" id="newReportContent" placeholder="اكتب محتوى التقرير بالتفصيل..." style="min-height:140px"></textarea></div>
     <div class="form-group">
@@ -2646,7 +2587,7 @@ function showAddReportModal() {
       <div id="reportFileZone" onclick="document.getElementById('reportFileInput').click()" style="border:2px dashed var(--slate-300);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--slate-50)">
         <div style="font-size:32px;margin-bottom:8px">📎</div>
         <div style="font-size:13px;color:var(--slate-500);font-weight:600">اضغط لإرفاق ملف</div>
-        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 25 ميجابايت</div>
+        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 100 ميجابايت</div>
       </div>
       <input type="file" id="reportFileInput" accept=".pdf,.doc,.docx" style="display:none" onchange="handleReportFile(this)">
       <div id="reportFileName" style="display:none;margin-top:8px;padding:10px 14px;background:#ECFDF5;border-radius:8px;font-size:13px;color:var(--green);font-weight:600"></div>
@@ -2670,15 +2611,6 @@ function showAddReportModal() {
       <button class="btn btn-lg btn-block" style="background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#fff" onclick="addReport('pending_approval')">📤 رفع التقرير للموافقة</button>
     `}
   `);
-}
-
-function selectAudience(val) {
-  document.getElementById('reportAudience').value = val;
-  var opts = {all:{color:'var(--gold)',bg:'#FEF3C7'},supervisors:{color:'var(--blue)',bg:'#EFF6FF'},admins:{color:'var(--purple)',bg:'#F3E8FF'},members:{color:'var(--slate-500)',bg:'#F1F5F9'}};
-  ['all','supervisors','admins','members'].forEach(function(k) {
-    var el = document.getElementById('aud_'+k);
-    if(el) { el.style.borderColor = k===val ? opts[k].color : 'var(--slate-200)'; el.style.background = k===val ? opts[k].bg : '#fff'; }
-  });
 }
 
 function addReport(status) {
@@ -2807,8 +2739,8 @@ function handleResponseFile(input) {
   if(!file) return;
   var ext = file.name.split('.').pop().toLowerCase();
   if(!['pdf','doc','docx'].includes(ext)) { showToast('⚠️ PDF أو Word فقط','#DC2626'); input.value=''; return; }
-  if(file.size > 25 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (25 ميجابايت)','#DC2626');
+  if(file.size > 100 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (100 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
@@ -2896,7 +2828,7 @@ function showAddApprovalModal() {
       <div id="approvalFileZone" onclick="document.getElementById('approvalFileInput').click()" style="border:2px dashed var(--slate-300);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--slate-50)">
         <div style="font-size:32px;margin-bottom:8px">📎</div>
         <div style="font-size:13px;color:var(--slate-500);font-weight:600">اضغط لإرفاق ملف</div>
-        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 25 ميجابايت</div>
+        <div style="font-size:11px;color:var(--slate-400);margin-top:4px">يدعم PDF و Word (.docx) — الحد الأقصى 100 ميجابايت</div>
       </div>
       <input type="file" id="approvalFileInput" accept=".pdf,.doc,.docx" style="display:none" onchange="handleApprovalFile(this)">
       <div id="approvalFileName" style="display:none;margin-top:8px;padding:10px 14px;background:#ECFDF5;border-radius:8px;font-size:13px;color:var(--green);font-weight:600"></div>
@@ -3564,8 +3496,8 @@ function handleApprovalFile(input) {
     input.value = '';
     return;
   }
-  if(file.size > 25 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (25 ميجابايت)','#DC2626');
+  if(file.size > 100 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (100 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
@@ -3605,8 +3537,8 @@ function handleReportFile(input) {
     input.value = '';
     return;
   }
-  if(file.size > 25 * 1024 * 1024) {
-    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (25 ميجابايت)','#DC2626');
+  if(file.size > 100 * 1024 * 1024) {
+    showToast('⚠️ حجم الملف يتجاوز الحد المسموح (100 ميجابايت)','#DC2626');
     input.value = '';
     return;
   }
@@ -3638,7 +3570,7 @@ function handleReportImages(input) {
   for(var i=0;i<files.length;i++) {
     (function(file){
       if(!file.type.startsWith('image/')) return;
-      if(file.size > 25*1024*1024) { showToast('⚠️ حجم الصورة '+file.name+' يتجاوز 25 ميجابايت','#DC2626'); return; }
+      if(file.size > 100*1024*1024) { showToast('⚠️ حجم الصورة '+file.name+' يتجاوز 100 ميجابايت','#DC2626'); return; }
       var reader = new FileReader();
       reader.onload = function(e) {
         reportImages.push({name:file.name, data:e.target.result, size:(file.size/1024).toFixed(0)+'KB'});
