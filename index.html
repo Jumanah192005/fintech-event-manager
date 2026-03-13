@@ -696,6 +696,7 @@ var firebaseConfig = {
 };
 var auth = null;
 var db = null;
+var storage = null;
 var _fbReady = false;
 var _fbListenersActive = false;
 var _suppressSync = false;
@@ -708,7 +709,8 @@ function loadFirebaseScripts() {
   var scripts = [
     'https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js',
     'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js',
-    'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js'
+    'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js',
+    'https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js'
   ];
   var loaded = 0;
   scripts.forEach(function(src, idx) {
@@ -735,6 +737,7 @@ function initFirebase() {
     firebase.initializeApp(firebaseConfig);
     auth = firebase.auth();
     db = firebase.firestore();
+    storage = firebase.storage();
     db.enablePersistence({synchronizeTabs:true}).catch(function(err){console.log('Persistence:',err.code)});
     _firebaseAvailable = true;
     console.log('🔥 Firebase initialized');
@@ -830,52 +833,81 @@ function clearOldFileCache() {
 function uploadToStorage(fileObj, folder, _attempt) {
   var attempt = _attempt || 1;
   var maxAttempts = 3;
-  if(!_firebaseAvailable || !db || !fileObj || !fileObj.data) {
-    console.warn('📁 Cannot save: fb='+_firebaseAvailable+' db='+!!db+' file='+!!fileObj);
-    return Promise.reject('Firebase غير متاح');
+  if(!_firebaseAvailable || !fileObj || !fileObj.data) {
+    return Promise.reject('Firebase غير متاح أو لا يوجد ملف');
   }
-  var fileId = fileObj._retryFileId || (folder + '_' + Date.now() + '_' + Math.random().toString(36).substr(2,5));
-  fileObj._retryFileId = fileId;
+
+  // === Firebase Storage (designed for large files up to 5GB) ===
+  if(storage) {
+    var fileName = folder + '/' + Date.now() + '_' + (fileObj.name||'file');
+    var ref = storage.ref(fileName);
+
+    // Convert base64 to blob
+    try {
+      var parts = fileObj.data.split(',');
+      var mime = parts[0].match(/:(.*?);/)[1];
+      var raw = atob(parts[1]);
+      var arr = new Uint8Array(raw.length);
+      for(var i=0; i<raw.length; i++) arr[i] = raw.charCodeAt(i);
+      var blob = new Blob([arr], {type: mime});
+    } catch(e) {
+      return Promise.reject('فشل تحويل الملف: '+e.message);
+    }
+
+    return new Promise(function(resolve, reject) {
+      var task = ref.put(blob);
+      task.on('state_changed',
+        function(snap) {
+          var pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
+          updateLoadingOverlay(null, pct);
+        },
+        function(err) {
+          console.error('📁 Storage upload attempt '+attempt+' failed:', err);
+          if(attempt < maxAttempts) {
+            updateLoadingOverlay('إعادة المحاولة ('+attempt+'/'+maxAttempts+')...');
+            setTimeout(function() {
+              uploadToStorage(fileObj, folder, attempt+1).then(resolve).catch(reject);
+            }, 2000);
+          } else {
+            reject(err);
+          }
+        },
+        function() {
+          task.snapshot.ref.getDownloadURL().then(function(url) {
+            console.log('📁 ✅ Uploaded to Storage:', fileName);
+            resolve({name:fileObj.name, size:fileObj.size, type:fileObj.type, url:url});
+          }).catch(reject);
+        }
+      );
+    });
+  }
+
+  // === Fallback: Firestore chunks (small files only) ===
+  if(!db) return Promise.reject('Firebase غير متاح');
+  var fileId = folder + '_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
   var data = fileObj.data;
   var chunkSize = 950000;
   var totalChunks = Math.ceil(data.length / chunkSize);
-  var sizeMB = (data.length / 1024 / 1024).toFixed(1);
-  console.log('📁 Upload attempt '+attempt+'/'+maxAttempts+': '+fileObj.name+' ('+totalChunks+' chunks, '+sizeMB+'MB)');
+  if(totalChunks > 10) return Promise.reject('الملف كبير — يرجى تفعيل Firebase Storage');
 
   var meta = {name:fileObj.name, size:fileObj.size, type:fileObj.type, tc:totalChunks, ts:Date.now()};
-
   function uploadChunk(i) {
     if(i >= totalChunks) return Promise.resolve();
     var chunk = data.substring(i * chunkSize, (i+1) * chunkSize);
     return db.collection('settings').doc('file_'+fileId+'_c'+i).set({d:chunk}).then(function() {
-      var pct = Math.round((i+1)/totalChunks*100);
-      updateLoadingOverlay(null, pct);
+      updateLoadingOverlay(null, Math.round((i+1)/totalChunks*100));
       return uploadChunk(i + 1);
     });
   }
-
   return db.collection('settings').doc('file_'+fileId+'_meta').set(meta)
     .then(function() { return uploadChunk(0); })
-    .then(function() {
-      console.log('📁 ✅ Uploaded:', fileObj.name, 'fileId='+fileId);
-      showToast('📁 ✅ تم رفع الملف: '+fileObj.name,'#059669');
-      return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId};
-    }).catch(function(err) {
-      console.error('📁 ❌ Attempt '+attempt+' failed:', err);
-      if(attempt < maxAttempts) {
-        showToast('⚠️ فشل الرفع — إعادة المحاولة ('+attempt+'/'+maxAttempts+')','#D97706');
-        return new Promise(function(resolve) { setTimeout(resolve, 2000); })
-          .then(function() { return uploadToStorage(fileObj, folder, attempt+1); });
-      }
-      showToast('❌ فشل رفع الملف بعد '+maxAttempts+' محاولات','#DC2626');
-      return Promise.reject(err);
-    });
+    .then(function() { return {name:fileObj.name, size:fileObj.size, type:fileObj.type, fileId:fileId}; });
 }
 
 function uploadImagesToStorage(images) {
-  if(!_firebaseAvailable || !db || !images || !images.length) return Promise.resolve(images||[]);
+  if(!_firebaseAvailable || !images || !images.length) return Promise.resolve(images||[]);
   return Promise.all(images.map(function(img) {
-    if(img.fileId) return Promise.resolve(img);
+    if(img.fileId || img.url) return Promise.resolve(img);
     return uploadToStorage(img, 'img');
   }));
 }
@@ -1811,7 +1843,8 @@ function showLoadingOverlay(msg) {
       '<div id="loadingMsg" style="font-weight:800;font-size:16px;color:var(--navy);margin-bottom:8px"></div>' +
       '<div id="loadingPct" style="font-size:28px;font-weight:900;color:var(--gold);margin-bottom:12px">0%</div>' +
       '<div style="width:100%;height:6px;background:var(--slate-200);border-radius:3px;overflow:hidden"><div id="loadingBar" style="width:0%;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold-dark));border-radius:3px;transition:width 0.3s"></div></div>' +
-      '<div style="font-size:11px;color:var(--slate-400);margin-top:12px">يرجى عدم إغلاق الصفحة</div></div>';
+      '<div style="font-size:11px;color:var(--slate-400);margin-top:12px">يرجى عدم إغلاق الصفحة</div>' +
+      '<button onclick="hideLoadingOverlay();showToast(\'تم الإلغاء\',\'#DC2626\')" style="margin-top:16px;background:none;border:1px solid var(--slate-300);border-radius:8px;padding:8px 20px;font-family:inherit;font-size:12px;color:var(--slate-500);cursor:pointer">إلغاء</button></div>';
     document.body.appendChild(el);
   }
   el.style.display = 'flex';
